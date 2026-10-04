@@ -280,6 +280,23 @@ class WindowFeatureTests(unittest.TestCase):
         self.win.open_tab_memory()  # modal: returns once close_dialog() has dismissed it
         self.assertEqual(seen.get("title"), "Tab Memory")
 
+    def test_identify_as_chrome_per_site(self):
+        wv = self.load("/blank")
+        self.assertNotIn("Chrome/", js(wv, "navigator.userAgent"), "default: the engine's own (Safari) user agent")
+        bb.set_site_value(self.win.site_settings, "127.0.0.1", "chrome_ua", True)
+        self.addCleanup(self.win.site_settings.clear)
+        wv = self.load("/blank")
+        self.assertIn(f"Chrome/{bb.CHROME_UA_MAJOR}", js(wv, "navigator.userAgent"))
+        self.assertIn("identifies as Chrome", self.win._describe_site_entry(self.win.site_settings["127.0.0.1"]))
+        # combined with JavaScript off: both apply
+        bb.set_site_value(self.win.site_settings, "127.0.0.1", "javascript", False)
+        wv = self.load("/js", wait_title="js-off")
+        self.assertEqual(wv.get_title(), "js-off")
+        self.assertIn("Chrome/", wv.get_settings().get_user_agent())
+        self.win.site_settings.clear()
+        wv = self.load("/js", wait_title="js-ran")
+        self.assertNotIn("Chrome/", js(wv, "navigator.userAgent"), "switched back off")
+
     def test_zoom_is_remembered_per_site(self):
         wv = self.load("/blank")
         self.win.adjust_zoom(0.3)

@@ -58,6 +58,8 @@ cp -r ${BUILD_ROOT}/* %{buildroot}/
 /usr/share/icons/hicolor/256x256/apps/bharat-browser.png
 
 %changelog
+* Sun Oct 04 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.4.5-1
+- Cloudflare human verification fix
 * Sun Oct 04 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.4.4-1
 - Per-tab memory
 * Sat Oct 03 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.4.3-1

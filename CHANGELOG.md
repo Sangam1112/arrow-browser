@@ -3,6 +3,13 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.4.5] - 2026-10-04
+
+### Fixed
+- **Cloudflare "Verify you are human" now works.** The browser claimed to be Chrome while running the WebKit engine; Cloudflare saw the mismatch and never let it through (0 of 6 test runs). It now identifies as what it is (Safari on Linux, the same form GNOME Web uses), and Cloudflare's checks pass (6 of 9 test runs without clicking; the checkbox challenge now shows normally for you to click). A site that refuses this browser can be switched back per site: lock icon -> "Identify as Chrome".
+- **Crash on google.com (the default homepage) on some systems.** WebKitGTK 2.52 with GTK3's accessibility bridge segfaults the browser on some pages while the accessibility service runs, even with no screen reader. The bridge is now turned off unless a screen reader (Orca) is running; set `BHARAT_ACCESSIBILITY=1` to keep it on.
+- The anti-fingerprinting script no longer runs inside Cloudflare's verification frame.
+
 ## [1.4.4] - 2026-10-04
 
 ### Added

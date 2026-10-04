@@ -82,6 +82,23 @@ class UrlHelperTests(unittest.TestCase):
         self.assertIsNone(bb._proc_pss_mb(2 ** 22 + 12345))
         self.assertIsInstance(bb.web_process_pids(), list)
 
+    def test_user_agent_matches_the_engine(self):
+        # Claiming Chrome from WebKit made Cloudflare's human verification fail every time.
+        self.assertIn("AppleWebKit/605.1.15", bb.USER_AGENT)
+        self.assertIn("Safari/605.1.15", bb.USER_AGENT)
+        self.assertNotIn("Chrome/", bb.USER_AGENT)
+        self.assertIn(f"Chrome/{bb.CHROME_UA_MAJOR}.0.0.0", bb.CHROME_USER_AGENT)
+
+    def test_accessibility_bridge_guard(self):
+        self.assertTrue(bb._should_disable_at_bridge({}, screen_reader_running=False))
+        self.assertFalse(bb._should_disable_at_bridge({}, screen_reader_running=True), "a screen reader keeps it on")
+        self.assertFalse(bb._should_disable_at_bridge({"BHARAT_ACCESSIBILITY": "1"}, False), "user can opt in")
+        self.assertFalse(bb._should_disable_at_bridge({"NO_AT_BRIDGE": "0"}, False), "an explicit choice is kept")
+        self.assertIsInstance(bb._screen_reader_running(), bool)
+
+    def test_fingerprint_script_skips_cloudflare_challenge_frame(self):
+        self.assertIn("challenges.cloudflare.com", bb.FARBLING_JS)
+
     def test_site_host_of(self):
         self.assertEqual(bb.site_host_of("https://WWW.Example.com:8080/x"), "www.example.com")
         self.assertEqual(bb.site_host_of(""), "")

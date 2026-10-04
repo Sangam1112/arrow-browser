@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Bharat Browser v1.4.4 - GTK3 / WebKit2 Python Application
+Bharat Browser v1.4.5 - GTK3 / WebKit2 Python Application
 Modern, Ultra-Fast, Multi-Tab, and Privacy-First Web Browser engineered for Linux (Ubuntu)
 """
 import sys
@@ -8,7 +8,7 @@ import os
 import json
 import shutil
 
-APP_VERSION = "1.4.4"
+APP_VERSION = "1.4.5"
 # The self-updater cannot rewrite a root-owned package install, so it keeps its updates in a per-user copy
 # that the launcher (/usr/bin/bharat-browser) prefers over the system one.
 USER_INSTALL_DIR = os.path.expanduser("~/.local/share/bharat-browser")
@@ -67,6 +67,35 @@ def _read_low_memory_mode_setting():
     except Exception:
         return False
 
+
+def _screen_reader_running():
+    """True if a screen reader (Orca) is running for this desktop session."""
+    try:
+        for pid in os.listdir("/proc"):
+            if pid.isdigit():
+                try:
+                    with open(f"/proc/{pid}/comm") as f:
+                        if f.read().strip() == "orca":
+                            return True
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return False
+
+
+def _should_disable_at_bridge(environ, screen_reader_running):
+    """WebKitGTK 2.52 with GTK3's accessibility bridge (atk-bridge) segfaults the whole browser on some pages
+    (google.com, the default homepage, every time on Ubuntu 26.04 / Linux Lite 8) while the AT-SPI bus runs, even
+    with no screen reader. Turn the bridge off unless a screen reader is in use or the user asks for it
+    (BHARAT_ACCESSIBILITY=1); an explicit NO_AT_BRIDGE in the environment is always respected."""
+    if "NO_AT_BRIDGE" in environ or environ.get("BHARAT_ACCESSIBILITY") == "1":
+        return False
+    return not screen_reader_running
+
+
+if _should_disable_at_bridge(os.environ, _screen_reader_running()):
+    os.environ["NO_AT_BRIDGE"] = "1"
 
 # Enable GPU Hardware Acceleration & System-Level Acceleration Flags
 os.environ["WEBKIT_FORCE_COMPOSITING_MODE"] = "1"
@@ -526,12 +555,19 @@ def build_notice_page(icon, heading, body_html, actions_html, tech=""):
         "LIVE": "", "GAME": "", "SCRIPT": "", "URI": "", "TECH": GLib.markup_escape_text(tech)})
 
 
-# Chrome-compatible UA so sites don't serve "unsupported browser" pages or flag
-# an outdated client as a bot. Chrome freezes everything after the major
-# version to ".0.0.0", so only CHROME_UA_MAJOR needs bumping. Update it each
-# release to the current stable major (Chrome 154 as of Oct 2026).
-CHROME_UA_MAJOR = 154
+# User agent that matches the engine: Safari on Linux, the form GNOME Web (also WebKitGTK) uses. Claiming to be
+# Chrome from a WebKit engine made Cloudflare's "Verify you are human" check fail every time (0 of 6 trials; 4 of 6
+# passed with this UA without clicking the checkbox), because the engine's features and network fingerprint
+# contradict the claim. WebKitGTK's own default ("Version/60.5") isn't a real Safari version, so it isn't used.
+# A site that refuses this browser can be switched to the Chrome UA from the lock-icon menu ("Identify as Chrome").
+SAFARI_VERSION = "18.0"
 USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) "
+    f"Version/{SAFARI_VERSION} Safari/605.1.15"
+)
+# Chrome freezes everything after the major version to ".0.0.0"; bump CHROME_UA_MAJOR to the current stable major.
+CHROME_UA_MAJOR = 154
+CHROME_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
     f"Chrome/{CHROME_UA_MAJOR}.0.0.0 Safari/537.36"
 )
@@ -1305,7 +1341,9 @@ FARBLING_JS = """
 (function() {
     if (window.__bharat_farbling__) return;
     window.__bharat_farbling__ = true;
-    if (window.location.hostname.includes('youtube.com') || window.location.hostname.includes('googlevideo.com')) return;
+    const host = window.location.hostname;
+    // Streaming sites, and Cloudflare's human-verification frame (it checks for altered browser values).
+    if (host.includes('youtube.com') || host.includes('googlevideo.com') || host === 'challenges.cloudflare.com') return;
 
     try {
         const origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
@@ -5061,7 +5099,8 @@ class BharatBrowserWindow(Gtk.Window):
     def _site_wants_filter(self, host):
         return self.adblock_enabled and self.site_settings.get(host, {}).get("adblock") is not False
 
-    def _settings_without_javascript(self):
+    def _site_settings_variant(self, js_off, chrome_ua):
+        """A copy of the window's WebKit settings with this site's choices: JavaScript off and/or the Chrome UA."""
         clone = WebKit2.Settings()
         for prop in self.web_settings.list_properties():
             if prop.flags & GObject.ParamFlags.WRITABLE and not prop.flags & GObject.ParamFlags.CONSTRUCT_ONLY:
@@ -5069,7 +5108,10 @@ class BharatBrowserWindow(Gtk.Window):
                     clone.set_property(prop.name, self.web_settings.get_property(prop.name))
                 except Exception:
                     pass
-        clone.set_enable_javascript(False)
+        if js_off:
+            clone.set_enable_javascript(False)
+        if chrome_ua:
+            clone.set_user_agent(CHROME_USER_AGENT)
         return clone
 
     def _apply_site_policy(self, webview, host):
@@ -5085,10 +5127,10 @@ class BharatBrowserWindow(Gtk.Window):
             else:
                 ucm.remove_filter(self.content_filter)
             webview._bharat_filter_on = want_filter
-        js_off = entry.get("javascript") is False
-        if js_off != getattr(webview, "_bharat_js_off", False):
-            webview.set_settings(self._settings_without_javascript() if js_off else self.web_settings)
-            webview._bharat_js_off = js_off
+        key = (entry.get("javascript") is False, entry.get("chrome_ua") is True)
+        if key != getattr(webview, "_bharat_settings_key", (False, False)):
+            webview.set_settings(self._site_settings_variant(*key) if any(key) else self.web_settings)
+            webview._bharat_settings_key = key
 
     def _remember_zoom(self, webview):
         host = site_host_of(webview.get_uri())
@@ -5607,6 +5649,8 @@ td.c{{text-align:right;color:#cbd5e1;width:70px}}td.b{{width:30%}}td.b span{{dis
                    lambda on: change("adblock", None if on else False))
         switch_row("Allow JavaScript", entry.get("javascript") is not False,
                    lambda on: change("javascript", None if on else False))
+        switch_row("Identify as Chrome (only if this site refuses this browser)", entry.get("chrome_ua") is True,
+                   lambda on: change("chrome_ua", True if on else None))
         if not self.is_private:
             switch_row("Offer to save passwords", entry.get("passwords") is not False,
                        lambda on: change("passwords", None if on else False, reload=False))
@@ -5965,6 +6009,8 @@ td.c{{text-align:right;color:#cbd5e1;width:70px}}td.b{{width:30%}}td.b span{{dis
             parts.append(f"zoom {round(entry['zoom'] * 100)}%")
         if entry.get("adblock") is False:
             parts.append("ad blocking off")
+        if entry.get("chrome_ua") is True:
+            parts.append("identifies as Chrome")
         if entry.get("javascript") is False:
             parts.append("JavaScript off")
         if entry.get("passwords") is False:
