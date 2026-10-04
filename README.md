@@ -153,16 +153,43 @@ cd /tmp/bharat_fedora && ./install-fedora.sh
 
 There is no native Windows build. Bharat Browser runs inside **WSL2** and opens as its own window on the Windows desktop through **WSLg** (Windows 11, or Windows 10 build 19044+).
 
-**1. Set up WSL (PowerShell)**
+**1. Prepare Windows**
+
+- **Check your Windows version:** press <kbd>Win</kbd>+<kbd>R</kbd>, type `winver`. You need Windows 11, or Windows 10 version 21H2 (build 19044) or later.
+- **Install Windows updates:** Settings → Windows Update → *Check for updates*, install everything, and restart.
+- **Check virtualization is on:** Task Manager → Performance → CPU should say *Virtualization: Enabled*. If it says Disabled, turn on Intel VT-x / AMD-V (sometimes called SVM) in your PC's BIOS/UEFI settings.
+
+**2. Update WSL (PowerShell as Administrator)**
+
+Right-click the Start button → *Terminal (Admin)* or *Windows PowerShell (Admin)*, then:
+
+```powershell
+wsl --update                   # get the latest WSL from Microsoft (it includes WSLg, which shows Linux windows on your desktop)
+wsl --version                  # should list a "WSL version" and a "WSLg version"
+wsl --set-default-version 2    # new Linux installs use WSL 2
+wsl --shutdown                 # restart WSL so the update takes effect
+```
+
+If `wsl --update` or `wsl --version` says WSL isn't installed or doesn't recognize the option, you have the old built-in WSL: run `wsl --install`, restart the PC, then run the commands above again.
+
+**3. Set up Ubuntu (PowerShell)**
 
 ```powershell
 wsl --install -d Ubuntu     # skip if Ubuntu is already installed; reboot if asked
 wsl -l -v                   # Ubuntu should show VERSION 2
 ```
 
-Open **Ubuntu** from the Start menu once to create your Linux username and password. If `wsl -l -v` shows VERSION 1, run `wsl --set-version Ubuntu 2`. If GUI apps don't open later, run `wsl --update` and then `wsl --shutdown`.
+Open **Ubuntu** from the Start menu once to create your Linux username and password. If `wsl -l -v` shows VERSION 1, run `wsl --set-version Ubuntu 2`.
 
-**2. Install (Ubuntu terminal)**
+**4. Update Ubuntu (Ubuntu terminal)**
+
+```bash
+sudo apt update && sudo apt full-upgrade -y
+```
+
+This brings Ubuntu's graphics and WebKit libraries up to date before the browser is installed. If it upgraded a lot, close Ubuntu, run `wsl --shutdown` in PowerShell, and open Ubuntu again.
+
+**5. Install (Ubuntu terminal)**
 
 ```bash
 git clone https://github.com/Sangam1112/bharat-browser.git
@@ -172,7 +199,7 @@ cd bharat-browser
 
 The script uses `sudo apt` (it will ask for your Linux password) to install Python, GTK3, WebKit2GTK and git, then installs the browser to `~/.local/share/bharat-browser` and a launcher at `~/.local/bin/bharat-browser`.
 
-**3. Run it**
+**6. Run it**
 
 ```bash
 bharat-browser
