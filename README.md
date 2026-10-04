@@ -9,14 +9,10 @@
 [![Latest release](https://img.shields.io/github/v/release/Sangam1112/bharat-browser?label=release&color=blue)](https://github.com/Sangam1112/bharat-browser/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian%20%7C%20Fedora%20%7C%20RHEL%20family%20%7C%20WSL2-orange.svg)](#-install)
-[![Installer](https://img.shields.io/badge/installer-~100%20KB-brightgreen.svg)](#-small-by-design)
+[![Installer](https://img.shields.io/badge/installer-~104%20KB-brightgreen.svg)](#-small-by-design)
 [![Updates](https://img.shields.io/badge/updates-signed%20(Ed25519)-6366f1.svg)](#-keeping-it-up-to-date)
 
 [**Highlights**](#-highlights) · [**Screenshots**](#-screenshots) · [**Install**](#-install) · [**Update**](#-keeping-it-up-to-date) · [**Shortcuts**](#-keyboard-shortcuts) · [**Privacy**](#-privacy--what-it-connects-to)
-
-<br>
-
-<img src="docs/screenshots/offline-page.png" width="820" alt="Bharat Browser showing its friendly offline page with a playable kite game">
 
 </div>
 
@@ -26,7 +22,7 @@
 
 <table>
   <tr>
-    <td width="25%" valign="top"><h3>🪶 Tiny</h3>A ~100 KB installer. It uses the WebKitGTK already on your system instead of shipping its own 150 MB engine.</td>
+    <td width="25%" valign="top"><h3>🪶 Tiny</h3>A ~104 KB installer. It uses the WebKitGTK already on your system instead of shipping its own 150 MB engine.</td>
     <td width="25%" valign="top"><h3>🛡️ Private</h3>Tracker blocking, HTTPS upgrades and cookie protection work from the very first launch.</td>
     <td width="25%" valign="top"><h3>⚡ Light</h3>Built to stay comfortable on older PCs: it sleeps unused tabs and trims its own memory.</td>
     <td width="25%" valign="top"><h3>🔐 Trustworthy</h3>Signed updates, passwords in your system keyring, and no telemetry at all.</td>
@@ -257,16 +253,16 @@ Spotted a security problem? Please open a [GitHub issue](https://github.com/Sang
 
 | Browser | Installer size | Installed size (approx.) |
 |---|---|---|
-| **Bharat Browser** | **~100 KB** (RPM) / **~85 KB** (.deb) | **~285 KB** |
+| **Bharat Browser** | **~104 KB** (RPM) / **~90 KB** (.deb) | **~310 KB** |
 | Google Chrome | ~90–100 MB | ~250–350 MB |
 | Mozilla Firefox | ~55–75 MB | ~200–300 MB |
 | Chromium | ~100–150 MB | ~300–400 MB |
 | Brave | ~90–110 MB | ~300+ MB |
 | Microsoft Edge (Linux) | ~90–100 MB | ~250–350 MB |
 
-That's roughly **500–1000× smaller**. Chrome, Firefox, Chromium, Brave and Edge each bundle a complete rendering engine (Blink + V8, or Gecko + SpiderMonkey), typically 150–250 MB on its own. Bharat Browser ships none of that: it's a ~280 KB Python/GTK3 program that calls into **WebKitGTK**, a system library most Linux desktops already have for other GTK apps, from the same engine family as Safari.
+That's roughly **500–1000× smaller**. Chrome, Firefox, Chromium, Brave and Edge each bundle a complete rendering engine (Blink + V8, or Gecko + SpiderMonkey), typically 150–250 MB on its own. Bharat Browser ships none of that: it's a ~295 KB Python/GTK3 program that calls into **WebKitGTK**, a system library most Linux desktops already have for other GTK apps, from the same engine family as Safari.
 
-> Bharat Browser's sizes were measured from this repository's release packages. The other browsers' figures are well-known public approximations that vary by version and platform.
+> Bharat Browser's sizes were measured from the v1.5.1 release packages. The other browsers' figures are well-known public approximations that vary by version and platform.
 
 ---
 
