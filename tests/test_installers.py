@@ -3,9 +3,11 @@
 (sudo, apt, dnf/rpm) stubbed out and a throw-away HOME, then check the result.
 Also checks the Fedora archive, because it has to work when extracted on its own."""
 import glob
+import json
 import os
 import shutil
 import stat
+import struct
 import subprocess
 import tarfile
 import tempfile
@@ -126,6 +128,92 @@ done
         with tarfile.open(archives[-1]) as tar:
             tar.extractall(extract)
         self.assert_installed(*self.run_installer(extract, "install-fedora.sh"))
+
+
+class WindowsInstallerTests(unittest.TestCase):
+    """The Windows Setup can't run here (it needs WSL), but its Linux half and its build can."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.bin = os.path.join(self.tmp, "bin")
+        os.makedirs(self.bin)
+        self.log = os.path.join(self.tmp, "apt.log")
+        # wslpath converts Windows paths inside WSL; here the "Windows" paths are already Linux ones.
+        self._stub("wslpath", '#!/bin/sh\necho "$2"\n')
+        self._stub("apt-get", f'#!/bin/sh\necho "$*" >> {self.log}\ncase "$*" in *full-upgrade*) exit 1;; esac\nexit 0\n')
+
+    def _stub(self, name, body):
+        path = os.path.join(self.bin, name)
+        with open(path, "w") as f:
+            f.write(body)
+        os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
+
+    def wsl_setup(self, *args, home=None):
+        env = dict(os.environ, PATH=self.bin + os.pathsep + os.environ["PATH"], TMPDIR=self.tmp,
+                   HOME=home or os.path.join(self.tmp, "home"))
+        return subprocess.run(["bash", os.path.join(ROOT, "windows", "wsl-setup.sh"), *args],
+                              env=env, capture_output=True, text=True, timeout=30)
+
+    def test_system_step_installs_the_package_even_if_the_upgrade_fails(self):
+        deb = os.path.join(self.tmp, "bharat-browser_9.9.9-1_all.deb")
+        with open(deb, "w") as f:
+            f.write("package")
+        result = self.wsl_setup("system", deb)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("updating Ubuntu didn't finish", result.stdout)
+        with open(self.log) as f:
+            calls = f.read().splitlines()
+        self.assertEqual(calls[0], "update")
+        self.assertIn(f"install -y {self.tmp}/bharat-browser.deb gnome-keyring fonts-noto-core", calls)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "bharat-browser.deb")), "the copy is cleaned up")
+
+    def test_user_step_saves_downloads_to_windows_and_never_overwrites_settings(self):
+        home = os.path.join(self.tmp, "home")
+        settings = os.path.join(home, ".config", "bharat-browser", "settings.json")
+        result = self.wsl_setup("user", "/mnt/c/Users/Asha/Downloads", home=home)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with open(settings) as f:
+            self.assertEqual(json.load(f), {"download_dir": "/mnt/c/Users/Asha/Downloads"})
+        self.assertEqual(stat.S_IMODE(os.stat(settings).st_mode), 0o600, "settings are private")
+        with open(settings, "w") as f:
+            json.dump({"dark_mode": True}, f)
+        self.wsl_setup("user", "/mnt/c/Users/Other/Downloads", home=home)
+        with open(settings) as f:
+            self.assertEqual(json.load(f), {"dark_mode": True})
+
+    def test_setup_script_is_valid_windows_powershell(self):
+        pwsh = os.environ.get("PWSH") or shutil.which("pwsh")
+        if not pwsh:
+            self.skipTest("PowerShell not installed (set PWSH to its path)")
+        path = os.path.join(ROOT, "windows", "setup.ps1")
+        with open(path, "rb") as f:
+            source = f.read()
+        # Windows PowerShell 5.1 reads a file without a BOM as ANSI, so keep it plain ASCII.
+        self.assertTrue(all(b < 128 for b in source), "setup.ps1 must be ASCII")
+        check = ("$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile("
+                 f"'{path}', [ref]$null, [ref]$e); $e | ForEach-Object {{ $_.ToString() }}")
+        result = subprocess.run([pwsh, "-NoProfile", "-Command", check], capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.stdout.strip(), "", "PowerShell parse errors")
+
+    def test_setup_exe_builds(self):
+        makensis = os.environ.get("MAKENSIS") or shutil.which("makensis")
+        deb = sorted(glob.glob(os.path.join(ROOT, "bharat-browser_*-1_all.deb")))
+        if not makensis or not deb:
+            self.skipTest("needs makensis (set MAKENSIS) and a built .deb")
+        icon = os.path.join(self.tmp, "icon.ico")
+        with open(os.path.join(ROOT, "assets", "bharat_icon.png"), "rb") as f:
+            png = f.read()
+        with open(icon, "wb") as f:
+            f.write(struct.pack("<3H4B2H2I", 0, 1, 1, 0, 0, 0, 0, 1, 32, len(png), 22) + png)
+        out = os.path.join(self.tmp, "setup.exe")
+        result = subprocess.run([makensis, "-V2", "-DVERSION=9.9.9", f"-DDEB={deb[-1]}", f"-DICON={icon}",
+                                 f"-DLICENSE={os.path.join(ROOT, 'LICENSE')}", f"-DOUTFILE={out}",
+                                 os.path.join(ROOT, "windows", "bharat-browser-setup.nsi")],
+                                capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with open(out, "rb") as f:
+            self.assertEqual(f.read(2), b"MZ", "a Windows program")
 
 
 if __name__ == "__main__":
