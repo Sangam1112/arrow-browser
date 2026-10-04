@@ -207,6 +207,33 @@ bharat-browser
 
 If the command isn't found, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc` and open a new terminal. Later, use **Settings → About → Check for updates** to stay current.
 
+**7. Add a desktop shortcut (optional)**
+
+So you can start the browser by double-clicking an icon instead of opening Ubuntu first. In the **Ubuntu terminal**, copy the browser's icon to Windows (Windows shortcuts need an `.ico` file):
+
+```bash
+WIN_APPDATA="$(wslpath "$(cmd.exe /c 'echo %LOCALAPPDATA%' 2>/dev/null | tr -d '\r')")"
+mkdir -p "$WIN_APPDATA/BharatBrowser"
+python3 -c 'import struct,sys; p=open(sys.argv[1],"rb").read(); open(sys.argv[2],"wb").write(struct.pack("<3H4B2H2I",0,1,1,0,0,0,0,1,32,len(p),22)+p)' \
+  ~/.local/share/bharat-browser/assets/bharat_icon.png "$WIN_APPDATA/BharatBrowser/bharat-browser.ico"
+```
+
+Then in **PowerShell** (a normal one, not Administrator), create the shortcut:
+
+```powershell
+$s = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\Bharat Browser.lnk")
+$s.TargetPath = "C:\Program Files\WSL\wslg.exe"
+$s.Arguments = "-d Ubuntu --cd ~ -- bash -lc bharat-browser"
+$s.IconLocation = "$env:LOCALAPPDATA\BharatBrowser\bharat-browser.ico"
+$s.Save()
+```
+
+A **Bharat Browser** icon appears on your desktop. `wslg.exe` starts the browser without leaving a terminal window open. To pin it, right-click the icon (on Windows 11, then *Show more options*) → **Pin to taskbar** or **Pin to Start**.
+
+- If your Ubuntu has a different name in `wsl -l -v` (for example `Ubuntu-24.04`), put that name after `-d` instead.
+- If Windows says it can't find `wslg.exe`, your WSL is out of date: go back to step 2.
+- The first launch after starting Windows can take a few seconds while WSL starts up.
+
 **Troubleshooting**
 
 - *No window appears:* check that WSLg works with `sudo apt install -y x11-apps && xeyes`. If that doesn't open either, run `wsl --update` and `wsl --shutdown` in PowerShell, then reopen Ubuntu.
