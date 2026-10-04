@@ -3,6 +3,16 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.5.1] - 2026-10-04
+
+### Changed
+- **Sleeping tabs now free all their memory.** A tab put to sleep used to load a blank page, which left its renderer process running and holding most of its memory (about 480 of 680 MB in a test). Its process is now ended, so all of that memory comes back. Clicking the tab reloads it where it was, with its Back history; that takes about 0.4 s longer than before. A popup and the tab that opened it share one process, so for those only the page is unloaded, as before.
+- **Restoring your last session no longer loads every tab at once.** Only the tab you land on loads; the others show as 💤 and load the first time you open them. With 6 restored tabs, memory 30 s after starting dropped from 959 MB (6 renderers) to 204 MB (1).
+- **Tabs go to sleep sooner when the computer is low on memory** (under 10% of RAM, or under 400 MB, available): the least recently used background tab sleeps first, one every 10 seconds while memory stays low. The browser checks this itself: the system's low-memory signal it relied on before only exists where the low-memory-monitor service is installed (Fedora has it; Ubuntu and Linux Lite don't). Controlled by the same "Sleep inactive tabs" switch.
+
+### Fixed
+- Automatic tab sleeping no longer puts tabs to sleep that you'd lose something in: **pinned tabs**, tabs using the **camera, microphone or screen sharing**, and tabs holding **text you typed but haven't sent** (any text in a text box or rich-text editor, a single field with more than 50 characters, or two or more filled-in fields). Tabs playing sound or still loading were already kept awake. "Suspend" in Tab Memory still works on any tab.
+
 ## [1.5.0] - 2026-10-04
 
 ### Changed

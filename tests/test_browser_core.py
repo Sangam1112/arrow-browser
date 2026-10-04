@@ -332,5 +332,18 @@ class SecretServiceTests(unittest.TestCase):
         self.assertEqual(client.find(host), [])
 
 
+class MemoryPressureTests(unittest.TestCase):
+    def test_low_means_under_ten_percent_or_400_mb_available(self):
+        self.assertTrue(bb.is_memory_low(600, 8000), "under 10% of 8 GB")
+        self.assertFalse(bb.is_memory_low(900, 8000))
+        self.assertTrue(bb.is_memory_low(350, 2000), "under the 400 MB floor on a small machine")
+        self.assertFalse(bb.is_memory_low(450, 2000))
+
+    def test_reads_proc_meminfo(self):
+        available, total = bb.system_memory_mb()
+        self.assertGreater(total, 0)
+        self.assertTrue(0 < available <= total)
+
+
 if __name__ == "__main__":
     unittest.main()

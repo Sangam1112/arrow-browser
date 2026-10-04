@@ -47,6 +47,7 @@ PAGES = {
     "/ads/landing": "<html><title>landing</title><body>an ordinary page whose address contains /ads/</body></html>",
     "/mem-heavy": ("<html><title>mem-heavy</title><body><script>window.keep=[];for(let i=0;i<20;i++){"
                    "let a=new Float64Array(1000000);a.fill(i+1);window.keep.push(a)}</script>heavy</body></html>"),
+    "/form": "<html><title>form</title><body><textarea id='t'></textarea></body></html>",
     "/third": "<html><title>third</title><body><img src='http://localhost:%PORT%/pixel'></body></html>",
 }
 
@@ -279,6 +280,120 @@ class WindowFeatureTests(unittest.TestCase):
         GLib.timeout_add(2500, close_dialog)
         self.win.open_tab_memory()  # modal: returns once close_dialog() has dismissed it
         self.assertEqual(seen.get("title"), "Tab Memory")
+
+    # ---- sleeping tabs ---------------------------------------------------
+    def open_tab(self, path, title):
+        self.win.create_new_tab(self.base + path)
+        tab = self.win._tab_boxes()[-1]
+        self.assertTrue(spin(lambda: tab._bharat_webview.get_title() == title and not tab._bharat_webview.is_loading(), 10))
+        return tab
+
+    def close_new_tabs(self, before):
+        for tab in self.win._tab_boxes():
+            if tab not in before:
+                self.win.close_tab(tab)
+
+    def asleep(self, tab):
+        return id(tab) in self.win._suspended_session_states
+
+    def test_sleeping_tab_ends_its_renderer_and_comes_back(self):
+        self.addCleanup(self.close_new_tabs, self.win._tab_boxes())
+        tab = self.open_tab("/article", "Test Article")
+        wv = tab._bharat_webview
+        wv.load_uri(self.base + "/done")
+        self.assertTrue(spin(lambda: wv.get_title() == "done", 10))
+        self.open_tab("/blank", "blank")
+        pid = self.measure([tab])[tab]["pid"]
+        self.assertIsNotNone(pid)
+        self.assertTrue(self.win._suspend_tab(tab))
+        self.assertTrue(spin(lambda: pid not in bb.web_process_pids(), 5), "the sleeping tab's renderer is gone")
+        self.assertTrue(tab._bharat_label.get_text().startswith("💤"))
+        self.assertIn(self.base + "/done", self.win._collect_session()[0], "still saved in the session")
+        self.win.notebook.set_current_page(self.win.notebook.page_num(tab))
+        self.assertTrue(spin(lambda: wv.get_title() == "done" and not wv.is_loading(), 10), "reloads where it was")
+        self.assertTrue(wv.can_go_back(), "with its history")
+        self.assertFalse(self.asleep(tab))
+
+    def test_restored_session_loads_only_the_tab_you_open(self):
+        self.addCleanup(self.close_new_tabs, self.win._tab_boxes())
+        before = len(self.win._tab_boxes())
+        urls = [self.base + "/r1", self.base + "/r2", self.base + "/blank"]
+        self.win.restore_tabs(urls)
+        r1, r2, last = self.win._tab_boxes()[before:]
+        self.assertIs(self.win.get_active_tab_box(), last)
+        self.assertTrue(spin(lambda: last._bharat_webview.get_title() == "blank", 10), "the tab you land on loads")
+        spin(lambda: False, 1.0)
+        self.assertEqual((Handler.hits.get("/r1", 0), Handler.hits.get("/r2", 0)), (0, 0), "the others wait")
+        self.assertEqual(r1._bharat_label.get_text(), "💤 127.0.0.1")
+        self.assertEqual(self.win._collect_session()[0][-3:], urls, "all of them stay in the session")
+        self.win.notebook.set_current_page(self.win.notebook.page_num(r1))
+        self.assertTrue(spin(lambda: Handler.hits.get("/r1", 0) > 0, 5), "opening a tab loads it")
+        self.assertEqual(Handler.hits.get("/r2", 0), 0)
+
+    def test_automatic_sleep_keeps_pinned_and_typed_in_tabs(self):
+        self.addCleanup(self.close_new_tabs, self.win._tab_boxes())
+        plain = self.open_tab("/blank", "blank")
+        pinned = self.open_tab("/thin", "thin")
+        self.win.set_tab_pinned(pinned, True)
+        typed = self.open_tab("/form", "form")
+        js(typed._bharat_webview, "const t=document.getElementById('t'); t.value='a reply in progress';"
+                                  "t.dispatchEvent(new Event('input', {bubbles: true})); 1")
+        self.open_tab("/blank", "blank")
+        for tab in (plain, pinned, typed):
+            self.win._tab_last_active[id(tab)] = time.monotonic() - 3600
+        self.win._check_tab_suspension()
+        self.assertTrue(spin(lambda: self.asleep(plain), 5), "an idle tab goes to sleep")
+        spin(lambda: False, 1.0)
+        self.assertFalse(self.asleep(pinned), "pinned tabs stay awake")
+        self.assertFalse(self.asleep(typed), "so do tabs holding typed text")
+        js(typed._bharat_webview, "document.getElementById('t').value=''; 1")  # the reply was sent
+        self.win._check_tab_suspension()
+        self.assertTrue(spin(lambda: self.asleep(typed), 5))
+
+    def test_low_memory_puts_the_oldest_background_tab_to_sleep(self):
+        self.addCleanup(self.close_new_tabs, self.win._tab_boxes())
+        oldest = self.open_tab("/blank", "blank")
+        older = self.open_tab("/thin", "thin")
+        self.open_tab("/blank", "blank")
+        now = time.monotonic()
+        self.win._tab_last_active[id(oldest)] = now - 100000
+        self.win._tab_last_active[id(older)] = now - 50000
+        real = bb.system_memory_mb
+        self.addCleanup(setattr, bb, "system_memory_mb", real)
+        bb.system_memory_mb = lambda: (4000.0, 8000.0)
+        self.win._check_memory_pressure()
+        spin(lambda: False, 1.0)
+        self.assertFalse(self.asleep(oldest), "nothing sleeps while memory is fine")
+        bb.system_memory_mb = lambda: (300.0, 8000.0)
+        self.win._check_memory_pressure()
+        self.assertTrue(spin(lambda: self.asleep(oldest), 5), "least recently used goes first")
+        self.assertFalse(self.asleep(older), "one tab per check")
+        self.win._check_memory_pressure()
+        self.assertTrue(spin(lambda: self.asleep(older), 5))
+
+    def test_popup_sleeps_without_killing_the_opener_it_shares_a_renderer_with(self):
+        self.addCleanup(self.close_new_tabs, self.win._tab_boxes())
+        opener_tab = self.open_tab("/done", "done")
+        opener = opener_tab._bharat_webview
+        popup = self.win.on_create_webview(opener, None)
+        popup_tab = self.win._tab_boxes()[-1]
+        popup.load_uri(self.base + "/thin")
+        self.assertTrue(spin(lambda: popup.get_title() == "thin", 10))
+        self.win.notebook.set_current_page(self.win.notebook.page_num(opener_tab))
+        Handler.hits.clear()
+        self.assertTrue(self.win._suspend_tab(popup_tab))
+        spin(lambda: False, 1.5)
+        self.assertEqual(js(opener, "document.title"), "done", "the opener's renderer is still running")
+        self.assertEqual(Handler.hits.get("/done", 0), 0, "and it was not reloaded")
+        self.win.close_tab(popup_tab)
+        self.assertEqual(opener._bharat_related, {opener})
+
+    def test_tab_on_screen_reloads_if_its_renderer_is_ended(self):
+        wv = self.load("/done", wait_title="done")
+        Handler.hits.clear()
+        wv.terminate_web_process()  # as if it shared a process with a tab put to sleep
+        self.assertTrue(spin(lambda: Handler.hits.get("/done", 0) > 0 and wv.get_title() == "done", 10))
+        self.assertFalse(self.asleep(self.win.get_active_tab_box()))
 
     def test_identify_as_chrome_per_site(self):
         wv = self.load("/blank")

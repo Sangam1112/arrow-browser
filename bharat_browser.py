@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Bharat Browser v1.5.0 - GTK3 / WebKit2 Python Application
+Bharat Browser v1.5.1 - GTK3 / WebKit2 Python Application
 Modern, Ultra-Fast, Multi-Tab, and Privacy-First Web Browser engineered for Linux (Ubuntu)
 """
 import sys
@@ -8,7 +8,7 @@ import os
 import json
 import shutil
 
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.5.1"
 # The self-updater cannot rewrite a root-owned package install, so it keeps its updates in a per-user copy
 # that the launcher (/usr/bin/bharat-browser) prefers over the system one.
 USER_INSTALL_DIR = os.path.expanduser("~/.local/share/bharat-browser")
@@ -1632,6 +1632,77 @@ def format_memory_mb(mb):
     return f"{mb / 1024:.1f} GB" if mb >= 1024 else f"{mb:.0f} MB"
 
 
+# ---------------------------------------------------------------------------
+# Sleeping tabs. A sleeping tab's renderer process is ended, so all of its memory is
+# returned; the tab reloads with its history when clicked. Tabs that would lose
+# something the user cares about are never put to sleep automatically (the same rules
+# as Chrome's Memory Saver): pinned tabs, tabs playing sound or using the camera,
+# microphone or screen sharing, and tabs holding text the user typed but hasn't sent.
+# ---------------------------------------------------------------------------
+# "Low" means less than 10% of RAM, or less than 400 MB, still available.
+LOW_MEMORY_AVAILABLE_FRACTION = 0.10
+LOW_MEMORY_AVAILABLE_MIN_MB = 400
+
+
+def system_memory_mb():
+    """(available_mb, total_mb) from /proc/meminfo, or None if it can't be read."""
+    values = {}
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                key, _, rest = line.partition(":")
+                if key in ("MemTotal", "MemAvailable"):
+                    values[key] = int(rest.split()[0]) / 1024.0
+    except (OSError, ValueError, IndexError):
+        return None
+    if "MemTotal" not in values or "MemAvailable" not in values:
+        return None
+    return values["MemAvailable"], values["MemTotal"]
+
+
+def is_memory_low(available_mb, total_mb):
+    return available_mb < max(LOW_MEMORY_AVAILABLE_MIN_MB, total_mb * LOW_MEMORY_AVAILABLE_FRACTION)
+
+
+# Runs in its own JS world (pages can't see or spoof it) and remembers which fields the
+# user typed into. GNOME Web uses the same idea to warn before reloading a page.
+TYPED_TEXT_TRACKER_JS = r"""
+(function() {
+    if (window.__bharatTyped) return;
+    const typed = new Set();
+    window.__bharatTyped = typed;
+    document.addEventListener('input', function(e) {
+        const el = e.composedPath ? e.composedPath()[0] : e.target;
+        if (el) typed.add(el);
+    }, { capture: true, passive: true });
+})();
+"""
+
+# True when the page still holds typed text worth keeping: any text in a text area or
+# rich-text editor, a single field with more than 50 characters, or two or more filled-in
+# fields (a form in progress). A short search box alone doesn't count.
+TYPED_TEXT_CHECK_JS = r"""
+(function() {
+    const typed = window.__bharatTyped;
+    if (!typed) return false;
+    let filled = 0;
+    for (const el of Array.from(typed)) {
+        if (!el.isConnected) { typed.delete(el); continue; }
+        if (el instanceof HTMLTextAreaElement) {
+            if (el.value.trim()) return true;
+        } else if (el instanceof HTMLInputElement) {
+            if (el.value.length > 50) return true;
+            if (el.value) filled++;
+        } else if (el.isContentEditable) {
+            if ((el.innerText || '').trim()) return true;
+        }
+    }
+    return filled >= 2;
+})()
+"""
+TYPED_TEXT_WORLD = "bharat-sleep"
+
+
 class BharatBrowserWindow(Gtk.Window):
     _global_css_loaded = False
 
@@ -1694,6 +1765,10 @@ class BharatBrowserWindow(Gtk.Window):
         self._suspended_tab_titles = {}
         self._suspended_tab_uris = {}
         self._current_active_tab_box = None
+        # While restoring the last session, switching to a tab must not load it: only
+        # the tab you land on loads, the others wait until they are first opened.
+        self._restoring_session = False
+        self._relieving_memory_pressure = False
 
         saved_settings = load_persistent_settings()
         self.dark_mode_active = saved_settings.get("dark_mode", False)
@@ -2021,6 +2096,11 @@ class BharatBrowserWindow(Gtk.Window):
             self.password_script = WebKit2.UserScript.new_for_world(
                 PASSWORD_DETECT_JS, WebKit2.UserContentInjectedFrames.TOP_FRAME,
                 WebKit2.UserScriptInjectionTime.END, "bharat-pw", None, None)
+        self.typed_text_script = None
+        if hasattr(WebKit2.UserScript, "new_for_world"):
+            self.typed_text_script = WebKit2.UserScript.new_for_world(
+                TYPED_TEXT_TRACKER_JS, WebKit2.UserContentInjectedFrames.TOP_FRAME,
+                WebKit2.UserScriptInjectionTime.START, TYPED_TEXT_WORLD, None, None)
 
         # Gtk.Notebook for Multi-Tab Architecture
         self.notebook = Gtk.Notebook()
@@ -2146,25 +2226,15 @@ class BharatBrowserWindow(Gtk.Window):
 
         # Restore Session or Open Initial Tab (private windows never read or
         # write session.json, so no private URL ever touches disk)
-        restored_pins = []
-        if self.is_private:
-            initial_urls = [self.homepage]
-        elif self.open_homepage_on_startup:
-            initial_urls = [self.homepage]
+        if self.is_private or self.open_homepage_on_startup:
+            self.create_new_tab(self.homepage)
         else:
             saved_session = load_session_state()
             restored_pins = [i for i in saved_session.get("pinned", []) if isinstance(i, int)]
             initial_urls = saved_session.get("urls", [])
             if isinstance(initial_urls, str):
                 initial_urls = [initial_urls]
-            if not initial_urls:
-                initial_urls = [self.homepage]
-
-        for url in initial_urls:
-            self.create_new_tab(url)
-        for index in restored_pins:
-            if 0 <= index < self.notebook.get_n_pages():
-                self.set_tab_pinned(self.notebook.get_nth_page(index), True)
+            self.restore_tabs(initial_urls or [self.homepage], restored_pins)
 
         # Refresh the downloaded tracker list in the background if it's stale.
         if not self.is_private:
@@ -2186,9 +2256,13 @@ class BharatBrowserWindow(Gtk.Window):
         # written to disk), so it doesn't weaken the private-window
         # no-trace-on-disk guarantee the way history/session saving would.
         GLib.timeout_add_seconds(self.TAB_SUSPENSION_CHECK_INTERVAL_SECONDS, self._check_tab_suspension)
+        # When the computer runs low on memory, put background tabs to sleep
+        # right away (least recently used first) instead of waiting 15 minutes.
+        GLib.timeout_add_seconds(self.MEMORY_PRESSURE_CHECK_INTERVAL_SECONDS, self._check_memory_pressure)
 
-        # React to system memory pressure by trimming WebKit's caches, instead
-        # of only ever growing them for the lifetime of the process.
+        # GLib's own low-memory signal as well: it only fires where the
+        # low-memory-monitor service is installed (Fedora has it; Ubuntu and
+        # Linux Lite don't), which is why the check above reads /proc itself.
         try:
             self._memory_monitor = Gio.MemoryMonitor.dup_default()
             self._memory_monitor.connect("low-memory-warning", self.on_low_memory_warning)
@@ -2228,6 +2302,7 @@ class BharatBrowserWindow(Gtk.Window):
             self.context.clear_cache()
         except Exception as e:
             print("Cache trim note:", e)
+        self._relieve_memory_pressure()
 
     BASE_FILTER_ID = "bharat-adblock-v3"  # bump whenever the built-in rules change: compiled filters are cached by id
 
@@ -2774,7 +2849,9 @@ class BharatBrowserWindow(Gtk.Window):
         dialog.set_titlebar(titlebar)
 
     # Multi-Tab Architecture Helper Methods
-    def create_new_tab(self, url=None, webview=None):
+    def create_new_tab(self, url=None, webview=None, asleep=False):
+        """asleep=True adds the tab without loading it (session restore): it shows as a
+        sleeping tab and loads when first opened."""
         tab_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
 
         # webview is only pre-supplied for popups/target="_blank" links via
@@ -2797,6 +2874,9 @@ class BharatBrowserWindow(Gtk.Window):
         ucm.add_script(self.media_script)
         ucm.add_script(self.farbling_script)
         ucm.add_script(self.prefetch_script)
+        if self.typed_text_script is not None and not getattr(ucm, "_bharat_typed_ready", False):
+            ucm._bharat_typed_ready = True  # popups share their opener's manager
+            ucm.add_script(self.typed_text_script)
         if self.dark_mode_active:
             self._set_dark_stylesheet(ucm, True)
 
@@ -2872,6 +2952,11 @@ class BharatBrowserWindow(Gtk.Window):
         tab_box._bharat_close_btn = close_btn
         tab_box._bharat_pinned = False
 
+        if asleep and load_initial_uri and url:
+            # Marked before the tab is added, so switching to it loads it.
+            self._mark_asleep(tab_box, url, None, site_host_of(url) or url)
+            load_initial_uri = False
+
         page_num = self.notebook.append_page(tab_box, header_event)
         self.notebook.set_tab_reorderable(tab_box, True)
         self.notebook.set_current_page(page_num)
@@ -2879,6 +2964,23 @@ class BharatBrowserWindow(Gtk.Window):
         if load_initial_uri:
             webview.load_uri(url or self.homepage)
         return webview
+
+    def restore_tabs(self, urls, pinned=()):
+        """Reopen the last session. Every tab comes back, but only the one you land on
+        loads now; each of the others loads the first time you open it, so restoring
+        many tabs doesn't start a renderer (about 200 MB or more) for each of them."""
+        self._restoring_session = True
+        try:
+            for url in urls:
+                self.create_new_tab(url, asleep=True)
+            for index in pinned:
+                if 0 <= index < self.notebook.get_n_pages():
+                    self.set_tab_pinned(self.notebook.get_nth_page(index), True)
+        finally:
+            self._restoring_session = False
+        active = self.get_active_tab_box()
+        if active is not None and id(active) in self._suspended_session_states:
+            self._reactivate_tab(active)
 
     def on_webview_enter_fullscreen(self, webview):
         # Returning False lets WebKit's default handler fullscreen the toplevel
@@ -2920,6 +3022,12 @@ class BharatBrowserWindow(Gtk.Window):
 
     def on_create_webview(self, webview, navigation_action):
         related_webview = WebKit2.WebView.new_with_related_view(webview)
+        # A related view shares its opener's renderer process, so ending that
+        # process to put one of them to sleep would also kill the other. Track
+        # the group so _suspend_tab() can tell (close_tab() leaves it).
+        group = getattr(webview, "_bharat_related", None) or {webview}
+        group.add(related_webview)
+        webview._bharat_related = related_webview._bharat_related = group
         self.create_new_tab(webview=related_webview)
         return related_webview
 
@@ -3019,6 +3127,7 @@ class BharatBrowserWindow(Gtk.Window):
                 except Exception:
                     pass
             webview._bharat_sig_ids = []
+            getattr(webview, "_bharat_related", set()).discard(webview)
 
             # Stop loading and destroy webview
             try:
@@ -3070,6 +3179,7 @@ class BharatBrowserWindow(Gtk.Window):
 
     TAB_SUSPENSION_CHECK_INTERVAL_SECONDS = 60
     TAB_SUSPENSION_INACTIVE_SECONDS = 15 * 60  # 15 minutes in the background
+    MEMORY_PRESSURE_CHECK_INTERVAL_SECONDS = 10
 
     def on_tab_changed(self, notebook, page, page_num):
         if self.find_bar.get_visible():
@@ -3084,7 +3194,7 @@ class BharatBrowserWindow(Gtk.Window):
         self._current_active_tab_box = page
         if page is not None:
             self._tab_last_active[id(page)] = time.monotonic()
-            if id(page) in self._suspended_session_states:
+            if id(page) in self._suspended_session_states and not self._restoring_session:
                 self._reactivate_tab(page)
 
         webview = self.get_active_webview()
@@ -3099,51 +3209,134 @@ class BharatBrowserWindow(Gtk.Window):
     def _check_tab_suspension(self):
         if self.tab_suspension_enabled:
             now = time.monotonic()
-            active_tab_box = self._current_active_tab_box
-            for i in range(self.notebook.get_n_pages()):
-                tab_box = self.notebook.get_nth_page(i)
-                if tab_box is active_tab_box or not hasattr(tab_box, '_bharat_webview'):
-                    continue
-                if id(tab_box) in self._suspended_session_states:
-                    continue  # already suspended
+            for tab_box in self._tab_boxes():
                 last_active = self._tab_last_active.get(id(tab_box))
                 if last_active is None or (now - last_active) < self.TAB_SUSPENSION_INACTIVE_SECONDS:
                     continue
-                webview = tab_box._bharat_webview
-                # Never suspend a tab that's still loading or playing audio/
-                # video — the whole point is not to disturb anything the
-                # user might actually be paying attention to in the
-                # background (a podcast tab, a download in progress, etc.).
-                if webview.is_loading() or webview.is_playing_audio():
-                    continue
-                self._suspend_tab(tab_box)
+                if self._may_sleep(tab_box):
+                    self._sleep_unless_typed(tab_box)
         return True  # keep the periodic sweep running
 
+    def _check_memory_pressure(self):
+        memory = system_memory_mb()
+        if memory is not None and is_memory_low(*memory):
+            self._relieve_memory_pressure()
+        return True  # keep checking
+
+    def _relieve_memory_pressure(self):
+        """Put the least recently used background tab that may sleep to sleep. Runs every
+        few seconds while memory stays low, so tabs go one at a time, oldest first."""
+        if not self.tab_suspension_enabled or self._relieving_memory_pressure:
+            return
+        candidates = sorted((tb for tb in self._tab_boxes() if self._may_sleep(tb)),
+                            key=lambda tb: self._tab_last_active.get(id(tb), 0.0))
+
+        def try_next(slept=False):
+            if slept or not candidates:
+                self._relieving_memory_pressure = False
+            else:
+                self._sleep_unless_typed(candidates.pop(0), try_next)
+
+        self._relieving_memory_pressure = True
+        try_next()
+
+    def _may_sleep(self, tab_box):
+        """Whether a background tab may be put to sleep automatically. Typed text is
+        checked separately (_sleep_unless_typed), since that needs the page."""
+        webview = getattr(tab_box, "_bharat_webview", None)
+        if webview is None or tab_box is self._current_active_tab_box or tab_box.get_parent() is None:
+            return False
+        if id(tab_box) in self._suspended_session_states or getattr(tab_box, "_bharat_pinned", False):
+            return False
+        # Never disturb something the user may be paying attention to in the
+        # background: a page still loading, a podcast, a video call.
+        if webview.is_loading() or webview.is_playing_audio():
+            return False
+        for getter in ("get_camera_capture_state", "get_microphone_capture_state", "get_display_capture_state"):
+            if hasattr(webview, getter) and getattr(webview, getter)() != WebKit2.MediaCaptureState.NONE:
+                return False
+        return True
+
+    def _sleep_unless_typed(self, tab_box, on_done=None):
+        """Put the tab to sleep unless the page holds text the user typed and hasn't sent.
+        Calls on_done(slept) once decided."""
+        def decide(typed):
+            slept = not typed and self._may_sleep(tab_box) and self._suspend_tab(tab_box)
+            if on_done is not None:
+                on_done(slept)
+
+        def js_done(view, result, _data):
+            try:
+                typed = view.run_javascript_finish(result).get_js_value().to_boolean()
+            except Exception:
+                typed = False  # JavaScript is off for this site: nothing was tracked
+            decide(typed)
+
+        if self.typed_text_script is None:
+            decide(False)
+        else:
+            tab_box._bharat_webview.run_javascript_in_world(TYPED_TEXT_CHECK_JS, TYPED_TEXT_WORLD, None, js_done, None)
+
     def _suspend_tab(self, tab_box):
+        """Put a tab to sleep: remember where it was, then end its renderer process so
+        all of its memory is returned. False when there is nothing to come back to."""
         webview = tab_box._bharat_webview
         uri = webview.get_uri() or ""
         if not uri or uri.startswith("about:"):
-            return  # nothing meaningful to save/restore
-        self._suspended_session_states[id(tab_box)] = webview.get_session_state()
+            return False  # nothing meaningful to save/restore
+        title = tab_box._bharat_label.get_text() if hasattr(tab_box, '_bharat_label') else uri
+        self._mark_asleep(tab_box, uri, webview.get_session_state(), title)
+        if len(getattr(webview, "_bharat_related", ())) > 1:
+            # Shares its renderer with a related tab (a popup and its opener):
+            # ending the process would kill that tab too, so only unload the page.
+            webview.load_uri("about:blank")
+        else:
+            # Loading about:blank instead keeps the process, and most of its
+            # memory, alive (measured: about 480 of 680 MB stayed in use).
+            webview.terminate_web_process()
+        return True
+
+    def _mark_asleep(self, tab_box, uri, session_state, title):
+        """Record a sleeping tab. session_state is None for a restored tab that has
+        never loaded; it then just loads uri when opened."""
+        self._suspended_session_states[id(tab_box)] = session_state
         self._suspended_tab_uris[id(tab_box)] = uri
-        original_title = tab_box._bharat_label.get_text() if hasattr(tab_box, '_bharat_label') else uri
-        self._suspended_tab_titles[id(tab_box)] = original_title
+        self._suspended_tab_titles[id(tab_box)] = title
         if hasattr(tab_box, '_bharat_label'):
-            tab_box._bharat_label.set_text("💤 " + original_title)
-        webview.load_uri("about:blank")
+            tab_box._bharat_label.set_text("💤 " + title)
 
     def _reactivate_tab(self, tab_box):
-        session_state = self._suspended_session_states.pop(id(tab_box), None)
-        self._suspended_tab_titles.pop(id(tab_box), None)
-        self._suspended_tab_uris.pop(id(tab_box), None)
-        if session_state is None:
+        if id(tab_box) not in self._suspended_session_states:
             return
+        session_state = self._suspended_session_states.pop(id(tab_box))
+        title = self._suspended_tab_titles.pop(id(tab_box), None)
+        uri = self._suspended_tab_uris.pop(id(tab_box), None)
+        if title and hasattr(tab_box, '_bharat_label'):
+            tab_box._bharat_label.set_text(title)  # the page's own title replaces it once loaded
         webview = tab_box._bharat_webview
-        webview.restore_session_state(session_state)
-        back_forward_list = webview.get_back_forward_list()
-        current_item = back_forward_list.get_current_item()
-        if current_item is not None:
-            webview.go_to_back_forward_list_item(current_item)
+        if session_state is not None:
+            webview.restore_session_state(session_state)
+            current_item = webview.get_back_forward_list().get_current_item()
+            if current_item is not None:
+                webview.go_to_back_forward_list_item(current_item)
+                return
+        if uri:
+            webview.load_uri(uri)
+
+    def _renderer_ended_by_us(self, webview):
+        """A renderer we ended belonged to this tab as well (WebKit shared one process
+        between them). Treat the tab as asleep, and bring it straight back if it's the
+        one on screen, rather than leaving it blank."""
+        tab_box = next((tb for tb in self._tab_boxes() if tb._bharat_webview is webview), None)
+        if tab_box is None or id(tab_box) in self._suspended_session_states:
+            return  # closing, or it is the tab we put to sleep
+        item = webview.get_back_forward_list().get_current_item()
+        if item is None:
+            return
+        self._mark_asleep(tab_box, item.get_uri(), webview.get_session_state(),
+                          tab_box._bharat_label.get_text() if hasattr(tab_box, '_bharat_label') else item.get_uri())
+        if tab_box is self._current_active_tab_box:
+            self._reactivate_tab(tab_box)
 
     def update_security_icon(self, uri):
         if uri.startswith("https://"):
@@ -3346,7 +3539,8 @@ class BharatBrowserWindow(Gtk.Window):
 
     def on_web_process_terminated(self, webview, reason):
         if reason == WebKit2.WebProcessTerminationReason.TERMINATED_BY_API:
-            return  # we asked for it (tab closed / suspended): not a crash
+            self._renderer_ended_by_us(webview)
+            return  # we asked for it (tab put to sleep): not a crash
         key = id(webview)
         count = self._crash_counts.get(key, 0) + 1
         self._crash_counts[key] = count
@@ -4923,7 +5117,9 @@ class BharatBrowserWindow(Gtk.Window):
         self._settings_section(
             perf, "MEMORY",
             switch("tab_suspension_enabled", "😴", "Sleep inactive tabs",
-                   "Unloads tabs you haven't looked at for 15 minutes. They reload, with their history, when you click them.",
+                   "Unloads tabs you haven't looked at for 15 minutes, or sooner when the computer is low on memory. "
+                   "They reload, with their history, when you click them. Pinned tabs, tabs playing sound or using "
+                   "the camera or microphone, and tabs with text you've typed are kept awake.",
                    store("tab_suspension_enabled")),
             switch("low_memory_mode", "🪶", "Low Memory Mode",
                    "Uses a much smaller page cache so the browser needs less RAM. Going back a page may reload it.",
