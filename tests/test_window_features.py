@@ -409,6 +409,33 @@ class WindowFeatureTests(unittest.TestCase):
             self.assertIn("https://imp.example/", [b["url"] for b in json.load(f)])
         self.assertIn("https://imp.example/h", [row[0] for row in self.win.url_completion_store])
 
+    def test_settings_dialog_pages_and_switches(self):
+        dialog = self.win.build_settings_dialog("privacy")
+        try:
+            stack = dialog._bharat_stack
+            self.assertEqual([stack.child_get_property(c, "name") for c in stack.get_children()],
+                             ["general", "privacy", "data", "performance", "advanced", "about"])
+            self.assertEqual(stack.get_visible_child_name(), "privacy")
+            controls = dialog._bharat_controls
+            for key, sw in controls.items():
+                if isinstance(sw, Gtk.Switch):
+                    self.assertEqual(sw.get_active(), bool(getattr(self.win, key)), key)
+
+            sw = controls["clear_history_on_exit"]
+            sw.set_active(not sw.get_active())
+            self.assertEqual(self.win.clear_history_on_exit, sw.get_active())
+            with open(bb.CONFIG_FILE) as f:
+                self.assertEqual(json.load(f)["clear_history_on_exit"], sw.get_active(), "saved to disk")
+            sw.set_active(not sw.get_active())
+
+            dark = controls["dark_mode_active"]
+            dark.set_active(not dark.get_active())
+            self.assertEqual(self.win.dark_mode_active, dark.get_active())
+            dark.set_active(not dark.get_active())
+            self.assertEqual(self.win.dark_mode_active, dark.get_active())
+        finally:
+            dialog.destroy()
+
     def test_private_window_never_writes_site_settings(self):
         private = bb.BharatBrowserWindow(private=True)
         try:

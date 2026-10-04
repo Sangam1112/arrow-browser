@@ -74,16 +74,16 @@ It is a native GTK3 desktop app, not a repackaged Chromium or Electron. The ad b
 </table>
 
 <details>
-<summary><b>Settings</b> (4 tabs)</summary>
+<summary><b>Settings</b> (6 pages)</summary>
 <br>
 <table>
   <tr>
     <td align="center"><b>General</b><br><img src="docs/screenshots/settings-general.png" alt="General settings" width="380"></td>
-    <td align="center"><b>Privacy</b><br><img src="docs/screenshots/settings-privacy.png" alt="Privacy settings" width="380"></td>
+    <td align="center"><b>Privacy &amp; Security</b><br><img src="docs/screenshots/settings-privacy.png" alt="Privacy and security settings" width="380"></td>
   </tr>
   <tr>
     <td align="center"><b>Performance</b><br><img src="docs/screenshots/settings-performance.png" alt="Performance settings" width="380"></td>
-    <td align="center"><b>Data &amp; Actions</b><br><img src="docs/screenshots/settings-data-actions.png" alt="Data and actions settings" width="380"></td>
+    <td align="center"><b>History &amp; Data</b><br><img src="docs/screenshots/settings-history-data.png" alt="History and data settings" width="380"></td>
   </tr>
 </table>
 </details>
@@ -103,7 +103,7 @@ Packages are on the [**Releases page**](https://github.com/Sangam1112/bharat-bro
 <tr valign="top"><td>
 
 ```bash
-VERSION=1.4.5
+VERSION=1.5.0
 wget https://github.com/Sangam1112/bharat-browser/releases/download/v$VERSION/bharat-browser_${VERSION}-1_all.deb
 sudo apt install ./bharat-browser_${VERSION}-1_all.deb
 ```
@@ -111,7 +111,7 @@ sudo apt install ./bharat-browser_${VERSION}-1_all.deb
 </td><td>
 
 ```bash
-VERSION=1.4.5
+VERSION=1.5.0
 wget https://github.com/Sangam1112/bharat-browser/releases/download/v$VERSION/bharat-browser-${VERSION}-1.noarch.rpm
 sudo dnf install ./bharat-browser-${VERSION}-1.noarch.rpm
 ```
@@ -144,7 +144,7 @@ export PATH="$HOME/.local/bin:$PATH"
 <summary><b>Fedora without git</b>: use the release archive</summary>
 
 ```bash
-VERSION=1.4.5
+VERSION=1.5.0
 wget https://github.com/Sangam1112/bharat-browser/releases/download/v$VERSION/bharat-browser_${VERSION}_fedora.tar.gz
 mkdir -p /tmp/bharat_fedora
 tar -xzf bharat-browser_${VERSION}_fedora.tar.gz -C /tmp/bharat_fedora
@@ -182,7 +182,7 @@ The script uses `sudo apt` (it will ask for your Linux password) to install Pyth
 bharat-browser
 ```
 
-If the command isn't found, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc` and open a new terminal. Later, use **Settings → Data & Actions → Check for updates** to stay current.
+If the command isn't found, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc` and open a new terminal. Later, use **Settings → About → Check for updates** to stay current.
 
 **Troubleshooting**
 
@@ -197,7 +197,7 @@ If the command isn't found, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.ba
 
 ## 🔄 Keeping it up to date
 
-- **Source or user install:** open **Settings → Data & Actions → Check for updates**. If a newer release exists it is downloaded, its signature is verified, and you just click **Restart Now**. The browser also checks quietly about 30 seconds after launch.
+- **Source or user install:** open **Settings → About → Check for updates**. If a newer release exists it is downloaded, its signature is verified, and you just click **Restart now**. The browser also checks quietly about 30 seconds after launch.
 - **`.deb` / `.rpm` installs:** the same button works (updates go to `~/.local/share/bharat-browser`, which the launcher prefers), or install the newer package from the [Releases page](https://github.com/Sangam1112/bharat-browser/releases/latest).
 - A release that is **not signed by the project key is never installed**, even if the download itself were tampered with.
 
@@ -216,7 +216,7 @@ rm -rf ~/.local/share/bharat-browser ~/.local/bin/bharat-browser \
 rm -rf ~/.config/bharat-browser ~/.cache/bharat-browser
 ```
 
-Saved passwords are in your system keyring, not in those folders: remove them first from **Settings → Privacy → Manage saved passwords**.
+Saved passwords are in your system keyring, not in those folders: remove them first from **Settings → Privacy & Security → Saved passwords**.
 
 ---
 
@@ -233,7 +233,7 @@ Saved passwords are in your system keyring, not in those folders: remove them fi
 | Back / forward | `Alt+←` / `Alt+→` | Zoom in / out / reset | `Ctrl++` / `Ctrl+-` / `Ctrl+0` |
 | Reload | `F5` or `Ctrl+R` | Developer inspector* | `F12` or `Ctrl+Shift+I` |
 
-\* Turn on **Developer Tools** in Settings → Performance first. Touchpad swipe also goes back/forward.
+\* Turn on **Developer tools** in Settings → Advanced first. Touchpad swipe also goes back/forward.
 
 ---
 
@@ -244,7 +244,7 @@ Bharat Browser has **no telemetry, analytics or accounts**. Besides the sites yo
 | What | To | When | Turn off |
 |---|---|---|---|
 | Update check | `api.github.com`, `raw.githubusercontent.com` | ~30 s after launch, and when you click *Check for updates* | n/a (it only reads a small version file) |
-| Tracker list | `easylist.to` | About once a week | Settings → Privacy → *Keep tracker lists up to date* |
+| Tracker list | `easylist.to` | About once a week | Settings → Privacy & Security → *Keep the tracker list up to date* |
 | Link / DNS prefetch | the pages you hover over | While browsing | n/a |
 
 **Where your data lives:** settings, history, bookmarks, session, per-site settings, cookies and statistics are in `~/.config/bharat-browser` (readable only by you); cache in `~/.cache/bharat-browser`; passwords only in your system keyring. Private windows write none of it to disk.

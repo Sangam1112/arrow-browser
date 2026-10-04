@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Bharat Browser v1.4.5 - GTK3 / WebKit2 Python Application
+Bharat Browser v1.5.0 - GTK3 / WebKit2 Python Application
 Modern, Ultra-Fast, Multi-Tab, and Privacy-First Web Browser engineered for Linux (Ubuntu)
 """
 import sys
@@ -8,7 +8,7 @@ import os
 import json
 import shutil
 
-APP_VERSION = "1.4.5"
+APP_VERSION = "1.5.0"
 # The self-updater cannot rewrite a root-owned package install, so it keeps its updates in a per-user copy
 # that the launcher (/usr/bin/bharat-browser) prefers over the system one.
 USER_INSTALL_DIR = os.path.expanduser("~/.local/share/bharat-browser")
@@ -2565,11 +2565,14 @@ class BharatBrowserWindow(Gtk.Window):
         .bharat-dialog .settings-card {
             background-color: rgba(255, 255, 255, 0.035);
             border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 10px;
-            padding: 12px 14px;
+            border-radius: 12px;
+            padding: 0 16px;
         }
         .bharat-dialog .settings-row {
-            padding: 4px 2px;
+            padding: 12px 0;
+        }
+        .bharat-dialog .settings-row-extra {
+            padding: 0 0 12px 48px;
         }
         .bharat-dialog .settings-row-title {
             color: #f8fafc;
@@ -2605,32 +2608,31 @@ class BharatBrowserWindow(Gtk.Window):
             border-radius: 6px;
             padding: 4px 10px;
         }
-        .settings-stack-switcher {
-            background: rgba(255, 255, 255, 0.04);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 999px;
-            padding: 3px;
+        .settings-sidebar {
+            background-color: #0d1118;
+            padding: 18px 12px 14px 12px;
         }
-        .settings-stack-switcher button {
+        .settings-nav, .settings-nav list, .settings-nav scrolledwindow, .settings-nav viewport {
             background: transparent;
-            color: #94a3b8;
             border: none;
-            border-radius: 999px;
-            padding: 5px 14px;
-            font-size: 12px;
-            font-weight: 600;
-            box-shadow: none;
-            transition: background 120ms ease, color 120ms ease;
         }
-        .settings-stack-switcher button:hover {
-            background: rgba(255, 255, 255, 0.06);
-            color: #f1f5f9;
+        .settings-nav separator { background: transparent; min-height: 0; }
+        .settings-nav list row {
+            color: #94a3b8;
+            border-radius: 8px;
+            padding: 0;
+            margin: 1px 0;
         }
-        .settings-stack-switcher button:checked {
-            background: #6366f1;
+        .settings-nav list row label { color: inherit; font-size: 13px; font-weight: 600; padding: 8px 10px; }
+        .settings-nav list row:hover { background-color: rgba(255, 255, 255, 0.06); color: #f1f5f9; }
+        .settings-nav list row:selected {
+            background-color: rgba(99, 102, 241, 0.22);
             color: #ffffff;
-            box-shadow: 0 2px 8px rgba(99, 102, 241, 0.35);
+            box-shadow: inset 3px 0 0 #818cf8;
         }
+        .bharat-dialog .settings-page { padding: 24px 32px 32px 32px; }
+        .bharat-dialog .settings-page-title { color: #ffffff; font-size: 22px; font-weight: 800; }
+        .bharat-dialog .settings-page-blurb { color: #94a3b8; font-size: 12px; margin-bottom: 6px; }
         .settings-action-btn {
             background: rgba(255, 255, 255, 0.05);
             color: #f1f5f9;
@@ -2659,22 +2661,19 @@ class BharatBrowserWindow(Gtk.Window):
             border-color: rgba(239, 68, 68, 0.5);
             color: #fecaca;
         }
-        /* --- Settings polish: header banner, icon bubbles, switches, chips --- */
-        .bharat-dialog .settings-title { color: #ffffff; font-size: 22px; font-weight: 800; }
-        .bharat-dialog .settings-subtitle { color: #94a3b8; font-size: 12px; }
+        /* --- Settings polish: sidebar brand, icon bubbles, switches, chips --- */
+        .bharat-dialog .settings-title { color: #ffffff; font-size: 17px; font-weight: 800; }
+        .bharat-dialog .settings-subtitle { color: #94a3b8; font-size: 11px; }
         .tricolor-strip {
             min-height: 4px;
             border-radius: 999px;
             background-image: linear-gradient(to right, #ff9933 0%, #ff9933 33%, #f8fafc 33%, #f8fafc 66%, #138808 66%, #138808 100%);
         }
-        .bharat-dialog .settings-card {
-            border-left: 3px solid #6366f1;
-            background-image: linear-gradient(135deg, rgba(99, 102, 241, 0.07), rgba(255, 255, 255, 0.0) 55%);
-        }
         .bharat-dialog .settings-section-title {
             color: #a5b4fc;
             letter-spacing: 1.5px;
             font-size: 11px;
+            margin-top: 14px;
         }
         .bharat-dialog .settings-icon-bubble {
             background-image: linear-gradient(135deg, rgba(99, 102, 241, 0.35), rgba(139, 92, 246, 0.25));
@@ -3796,24 +3795,7 @@ class BharatBrowserWindow(Gtk.Window):
             btn_reset_folder.set_sensitive(bool(self.download_dir))
 
         def on_change_folder(_btn):
-            chooser = Gtk.FileChooserDialog(
-                title="Choose download folder",
-                transient_for=dialog,
-                action=Gtk.FileChooserAction.SELECT_FOLDER,
-            )
-            chooser.add_button("Cancel", Gtk.ResponseType.CANCEL)
-            chooser.add_button("Select", Gtk.ResponseType.ACCEPT)
-            chooser.set_create_folders(True)
-            chooser.set_current_folder(self.get_downloads_dir())
-            if chooser.run() == Gtk.ResponseType.ACCEPT:
-                chosen = chooser.get_filename()
-                if chosen and os.access(chosen, os.W_OK | os.X_OK):
-                    self.download_dir = chosen
-                    self.save_settings()
-                    self.statusbar.push(self.context_id, f"📁 Downloads will be saved to {chosen}")
-                else:
-                    self.statusbar.push(self.context_id, "⚠️ That folder isn't writable; download folder unchanged")
-            chooser.destroy()
+            self.choose_download_folder(dialog)
             refresh_folder_label()
 
         def on_reset_folder(_btn):
@@ -4540,446 +4522,451 @@ class BharatBrowserWindow(Gtk.Window):
             self.statusbar.push(self.context_id, f"❌ Screenshot failed: {str(e)}")
 
     @staticmethod
-    def _create_setting_card(title_text=None):
-        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        card.get_style_context().add_class("settings-card")
-        if title_text:
-            title_lbl = Gtk.Label(xalign=0.0)
-            title_lbl.set_markup(f"<b>{GLib.markup_escape_text(title_text)}</b>")
-            title_lbl.get_style_context().add_class("settings-section-title")
-            card.pack_start(title_lbl, False, False, 0)
-            card.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 2)
-        return card
+    def _settings_text(title_text, subtitle_text=None):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        box.set_valign(Gtk.Align.CENTER)
+        title_lbl = Gtk.Label(label=title_text, xalign=0.0)
+        title_lbl.set_line_wrap(True)
+        title_lbl.get_style_context().add_class("settings-row-title")
+        box.pack_start(title_lbl, False, False, 0)
+        box._bharat_subtitle = None
+        if subtitle_text is not None:
+            sub_lbl = Gtk.Label(label=subtitle_text, xalign=0.0)
+            sub_lbl.set_line_wrap(True)
+            sub_lbl.get_style_context().add_class("settings-hint-label")
+            box.pack_start(sub_lbl, False, False, 0)
+            box._bharat_subtitle = sub_lbl
+        return box
 
-    @staticmethod
-    def _create_toggle_row(title_text, subtitle_text, is_active, on_toggled_cb):
+    @classmethod
+    def _settings_row(cls, icon, title_text, subtitle_text=None, *controls):
+        """One line of a settings card: icon bubble, title + hint, controls on the right.
+        The hint label is kept on row._bharat_subtitle so callers can update it."""
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.get_style_context().add_class("settings-row")
-
-        # "🛡️ Ad Blocking" -> round icon bubble on the left + "Ad Blocking" title.
-        icon_part, _, rest = title_text.partition(" ")
-        if rest and not icon_part.isascii():
-            bubble = Gtk.Label(label=icon_part)
+        if icon:
+            bubble = Gtk.Label(label=icon)
             bubble.get_style_context().add_class("settings-icon-bubble")
             bubble.set_valign(Gtk.Align.CENTER)
             row.pack_start(bubble, False, False, 0)
-            title_text = rest
-
-        text_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        title_lbl = Gtk.Label(xalign=0.0)
-        title_lbl.set_markup(f"<span weight='semibold'>{GLib.markup_escape_text(title_text)}</span>")
-        title_lbl.get_style_context().add_class("settings-row-title")
-        text_vbox.pack_start(title_lbl, False, False, 0)
-
-        if subtitle_text:
-            sub_lbl = Gtk.Label(xalign=0.0)
-            sub_lbl.set_markup(f"<small>{GLib.markup_escape_text(subtitle_text)}</small>")
-            sub_lbl.get_style_context().add_class("settings-hint-label")
-            sub_lbl.set_line_wrap(True)
-            text_vbox.pack_start(sub_lbl, False, False, 0)
-
-        row.pack_start(text_vbox, True, True, 0)
-
-        chk = Gtk.Switch()
-        chk.set_active(bool(is_active))
-        chk.set_valign(Gtk.Align.CENTER)
-        if on_toggled_cb:
-            chk.connect("notify::active", lambda sw, _pspec: on_toggled_cb(sw.get_active()))
-        row.pack_end(chk, False, False, 0)
+        text = cls._settings_text(title_text, subtitle_text)
+        row.pack_start(text, True, True, 0)
+        row._bharat_subtitle = text._bharat_subtitle
+        for control in reversed(controls):
+            control.set_valign(Gtk.Align.CENTER)
+            row.pack_end(control, False, False, 0)
         return row
 
-    def on_settings_clicked(self, btn):
-        title_text = f"Bharat Browser Settings (v{self.current_version})"
-        dialog = Gtk.Dialog(
-            title=title_text,
-            transient_for=self,
-            modal=True,
-            destroy_with_parent=True
+    @classmethod
+    def _settings_switch_row(cls, icon, title_text, subtitle_text, is_active, on_toggled_cb):
+        switch = Gtk.Switch()
+        switch.set_active(bool(is_active))
+        switch.connect("notify::active", lambda sw, _pspec: on_toggled_cb(sw.get_active()))
+        row = cls._settings_row(icon, title_text, subtitle_text, switch)
+        row._bharat_switch = switch
+        return row
+
+    @classmethod
+    def _settings_button_row(cls, icon, title_text, subtitle_text, button_label, on_clicked,
+                             style="settings-action-btn"):
+        button = Gtk.Button(label=button_label)
+        button.get_style_context().add_class(style)
+        button.connect("clicked", lambda _b: on_clicked())
+        row = cls._settings_row(icon, title_text, subtitle_text, button)
+        row._bharat_button = button
+        return row
+
+    @staticmethod
+    def _settings_section(page_box, title_text, *rows):
+        """A heading followed by a card holding `rows`, separated by thin lines."""
+        heading = Gtk.Label(label=title_text, xalign=0.0)
+        heading.get_style_context().add_class("settings-section-title")
+        page_box.pack_start(heading, False, False, 0)
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        card.get_style_context().add_class("settings-card")
+        for i, row in enumerate(rows):
+            if i:
+                card.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 0)
+            card.pack_start(row, False, False, 0)
+        page_box.pack_start(card, False, False, 0)
+        return card
+
+    def choose_download_folder(self, parent):
+        """Ask for a new download folder. Returns True if it changed."""
+        chooser = Gtk.FileChooserDialog(
+            title="Choose download folder",
+            transient_for=parent,
+            action=Gtk.FileChooserAction.SELECT_FOLDER,
         )
+        chooser.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        chooser.add_button("Select", Gtk.ResponseType.ACCEPT)
+        chooser.set_create_folders(True)
+        chooser.set_current_folder(self.get_downloads_dir())
+        changed = False
+        if chooser.run() == Gtk.ResponseType.ACCEPT:
+            chosen = chooser.get_filename()
+            if chosen and os.access(chosen, os.W_OK | os.X_OK):
+                self.download_dir = chosen
+                self.save_settings()
+                changed = True
+                self.statusbar.push(self.context_id, f"📁 Downloads will be saved to {chosen}")
+            else:
+                self.statusbar.push(self.context_id, "⚠️ That folder isn't writable; download folder unchanged")
+        chooser.destroy()
+        return changed
+
+    def on_settings_clicked(self, btn, page=None):
+        dialog = self.build_settings_dialog(page)
+        dialog.show_all()
+        dialog.run()
+        dialog.destroy()
+
+    def build_settings_dialog(self, page=None):
+        """The Settings window: a sidebar of pages, each a column of titled cards.
+        `page` is the stack name to open on (general, privacy, data, performance,
+        advanced, about). Every switch is also kept in dialog._bharat_controls,
+        keyed by the setting it changes."""
+        dialog = Gtk.Dialog(title="Settings", transient_for=self, modal=True, destroy_with_parent=True)
         dialog.get_style_context().add_class("bharat-dialog")
-        self.apply_dark_titlebar(dialog, title_text)
-        close_btn = dialog.add_button("Close", Gtk.ResponseType.CLOSE)
-        close_btn.get_style_context().add_class("settings-primary-btn")
-        dialog.set_default_response(Gtk.ResponseType.CLOSE)
-        dialog.set_default_size(620, 640)
+        self.apply_dark_titlebar(dialog, "Settings")
+        dialog.set_default_size(880, 640)
+        controls = {}
+        dialog._bharat_controls = controls
+
+        def close_then(fn):
+            # Close Settings first so the next window isn't stacked under a modal dialog.
+            dialog.response(Gtk.ResponseType.CLOSE)
+            GLib.idle_add(lambda: (fn(), False)[1])
+
+        def switch(key, icon, title_text, subtitle_text, on_toggled):
+            row = self._settings_switch_row(icon, title_text, subtitle_text, getattr(self, key), on_toggled)
+            controls[key] = row._bharat_switch
+            return row
+
+        def store(key):
+            return lambda act: (setattr(self, key, act), self.save_settings())
 
         content_area = dialog.get_content_area()
-        content_area.set_margin_start(16)
-        content_area.set_margin_end(16)
-        content_area.set_margin_top(12)
-        content_area.set_margin_bottom(12)
+        content_area.set_border_width(0)
+        content_area.set_spacing(0)
+        # No button row: the title bar's close button and Esc close Settings.
+        for action_box in content_area.get_children():
+            action_box.set_no_show_all(True)
+            action_box.hide()
+        body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        content_area.pack_start(body, True, True, 0)
 
-        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        content_area.pack_start(main_box, True, True, 0)
-
-        # Header banner: logo, title, tagline and a tricolour accent line.
-        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
-        logo_path = self.icon_path
-        if logo_path:
+        # --- Sidebar: brand, tricolour accent, page list --------------------
+        sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        sidebar.get_style_context().add_class("settings-sidebar")
+        sidebar.set_size_request(220, -1)
+        brand = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        if self.icon_path:
             try:
-                logo_pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(logo_path, 52, 52, True)
-                header.pack_start(Gtk.Image.new_from_pixbuf(logo_pb), False, False, 0)
+                logo_pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(self.icon_path, 36, 36, True)
+                brand.pack_start(Gtk.Image.new_from_pixbuf(logo_pb), False, False, 0)
             except Exception as e:
                 print("Settings logo note:", e)
-        header_text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        header_text.set_valign(Gtk.Align.CENTER)
+        brand_text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        brand_text.set_valign(Gtk.Align.CENTER)
         lbl_title = Gtk.Label(label="Settings", xalign=0.0)
         lbl_title.get_style_context().add_class("settings-title")
-        lbl_sub = Gtk.Label(label="Make Bharat Browser yours — fast, private, and proudly made in India", xalign=0.0)
-        lbl_sub.get_style_context().add_class("settings-subtitle")
-        header_text.pack_start(lbl_title, False, False, 0)
-        header_text.pack_start(lbl_sub, False, False, 0)
-        header.pack_start(header_text, True, True, 0)
-        main_box.pack_start(header, False, False, 0)
+        lbl_version = Gtk.Label(label=f"Bharat Browser {self.current_version}", xalign=0.0)
+        lbl_version.get_style_context().add_class("settings-subtitle")
+        brand_text.pack_start(lbl_title, False, False, 0)
+        brand_text.pack_start(lbl_version, False, False, 0)
+        brand.pack_start(brand_text, True, True, 0)
+        sidebar.pack_start(brand, False, False, 0)
         strip = Gtk.Box()
         strip.get_style_context().add_class("tricolor-strip")
-        main_box.pack_start(strip, False, False, 0)
+        sidebar.pack_start(strip, False, False, 0)
 
-        # Tab navigation with Gtk.Stack and Gtk.StackSwitcher
         stack = Gtk.Stack()
-        stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
-        stack.set_transition_duration(200)
+        stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        stack.set_transition_duration(120)
+        nav = Gtk.StackSidebar()
+        nav.set_stack(stack)
+        nav.get_style_context().add_class("settings-nav")
+        sidebar.pack_start(nav, True, True, 0)
+        if self.is_private:
+            sidebar.pack_start(self._hint("🕵 Private window: history, import and site data aren't saved here."),
+                               False, False, 0)
 
-        stack_switcher = Gtk.StackSwitcher()
-        stack_switcher.set_stack(stack)
-        stack_switcher.set_halign(Gtk.Align.CENTER)
-        stack_switcher.get_style_context().add_class("settings-stack-switcher")
-        main_box.pack_start(stack_switcher, False, False, 0)
-        main_box.pack_start(stack, True, True, 0)
+        body.pack_start(sidebar, False, False, 0)
+        body.pack_start(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 0)
+        body.pack_start(stack, True, True, 0)
 
-        def _create_scrollable_page():
+        def add_page(name, nav_label, heading, blurb):
             scroller = Gtk.ScrolledWindow()
             scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-            page_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-            page_box.set_margin_start(4)
-            page_box.set_margin_end(4)
-            page_box.set_margin_top(8)
-            page_box.set_margin_bottom(8)
+            page_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            page_box.get_style_context().add_class("settings-page")
+            title_lbl = Gtk.Label(label=heading, xalign=0.0)
+            title_lbl.get_style_context().add_class("settings-page-title")
+            page_box.pack_start(title_lbl, False, False, 0)
+            blurb_lbl = Gtk.Label(label=blurb, xalign=0.0)
+            blurb_lbl.set_line_wrap(True)
+            blurb_lbl.get_style_context().add_class("settings-page-blurb")
+            page_box.pack_start(blurb_lbl, False, False, 0)
             scroller.add(page_box)
-            return scroller, page_box
+            stack.add_titled(scroller, name, nav_label)
+            return page_box
 
-        # --- Tab 1: General -----------------------------------------------
-        gen_scroller, gen_box = _create_scrollable_page()
+        # --- General ----------------------------------------------------------
+        gen = add_page("general", "🌐  General", "General",
+                       "What opens when you start, where searches and downloads go, and how pages look.")
 
-        search_card = self._create_setting_card("SEARCH ENGINE")
-        search_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        search_bubble = Gtk.Label(label="🔍")
-        search_bubble.get_style_context().add_class("settings-icon-bubble")
-        search_bubble.set_valign(Gtk.Align.CENTER)
-        search_row.pack_start(search_bubble, False, False, 0)
-        search_lbl_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        s_title = Gtk.Label(xalign=0.0)
-        s_title.set_markup("<span weight='semibold'>Default Search Engine</span>")
-        s_title.get_style_context().add_class("settings-row-title")
-        search_lbl_box.pack_start(s_title, False, False, 0)
-        s_hint = Gtk.Label(xalign=0.0)
-        s_hint.set_markup("<small>Used when searching directly from the address bar.</small>")
-        s_hint.get_style_context().add_class("settings-hint-label")
-        search_lbl_box.pack_start(s_hint, False, False, 0)
-        search_row.pack_start(search_lbl_box, True, True, 0)
+        home_row = self._settings_row("🏠", "Homepage", "Opens on every new tab (Ctrl+T).")
+        home_entry = Gtk.Entry()
+        home_entry.set_text(self.homepage)
+        home_entry.set_placeholder_text("e.g. example.com or https://example.com")
+        home_entry.set_hexpand(True)
+        btn_set_home = Gtk.Button(label="Save")
+        btn_set_home.get_style_context().add_class("settings-primary-btn")
+        btn_reset_home = Gtk.Button(label="Reset")
+        btn_reset_home.get_style_context().add_class("settings-action-btn")
+        btn_reset_home.set_tooltip_text(f"Go back to {DEFAULT_HOMEPAGE}")
+        home_line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        home_line.get_style_context().add_class("settings-row-extra")
+        for widget, expand in ((home_entry, True), (btn_set_home, False), (btn_reset_home, False)):
+            home_line.pack_start(widget, expand, expand, 0)
+        home_block = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        home_block.pack_start(home_row, False, False, 0)
+        home_block.pack_start(home_line, False, False, 0)
+
+        def _apply_homepage(new_value):
+            self.homepage = sanitize_homepage_url(new_value)
+            home_entry.set_text(self.homepage)
+            self.save_settings()
+            home_row._bharat_subtitle.set_text(f"✅ Saved: {self.homepage}")
+            GLib.timeout_add(3000, lambda: (home_row._bharat_subtitle.set_text("Opens on every new tab (Ctrl+T)."), False)[1])
+
+        btn_set_home.connect("clicked", lambda b: _apply_homepage(home_entry.get_text()))
+        home_entry.connect("activate", lambda e: _apply_homepage(e.get_text()))
+        btn_reset_home.connect("clicked", lambda b: _apply_homepage(DEFAULT_HOMEPAGE))
+
+        self._settings_section(
+            gen, "STARTUP",
+            home_block,
+            switch("open_homepage_on_startup", "🚀", "Start with the homepage",
+                   "When off, the browser reopens the tabs you had open last time.",
+                   store("open_homepage_on_startup")),
+        )
 
         search_combo = Gtk.ComboBoxText()
         for engine_name in SEARCH_ENGINES:
             search_combo.append_text(engine_name)
         search_combo.set_active(list(SEARCH_ENGINES.keys()).index(self.search_engine))
         search_combo.connect("changed", lambda cb: (setattr(self, 'search_engine', cb.get_active_text()), self.save_settings()))
-        search_combo.set_valign(Gtk.Align.CENTER)
-        search_row.pack_end(search_combo, False, False, 0)
-        search_card.pack_start(search_row, False, False, 0)
-        gen_box.pack_start(search_card, False, False, 0)
+        controls["search_engine"] = search_combo
 
-        home_card = self._create_setting_card("HOMEPAGE & STARTUP")
-        home_head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        home_bubble = Gtk.Label(label="🏠")
-        home_bubble.get_style_context().add_class("settings-icon-bubble")
-        home_bubble.set_valign(Gtk.Align.CENTER)
-        home_head.pack_start(home_bubble, False, False, 0)
-        home_lbl_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        h_title = Gtk.Label(xalign=0.0)
-        h_title.set_markup("<span weight='semibold'>Custom Homepage</span>")
-        h_title.get_style_context().add_class("settings-row-title")
-        home_lbl_box.pack_start(h_title, False, False, 0)
-        h_hint = Gtk.Label(xalign=0.0)
-        h_hint.set_markup("<small>Loaded on new tabs (Ctrl+T) and initial startup.</small>")
-        h_hint.get_style_context().add_class("settings-hint-label")
-        home_lbl_box.pack_start(h_hint, False, False, 0)
-        home_head.pack_start(home_lbl_box, True, True, 0)
-        home_card.pack_start(home_head, False, False, 0)
+        btn_change_folder = Gtk.Button(label="Change…")
+        btn_change_folder.get_style_context().add_class("settings-action-btn")
+        btn_reset_folder = Gtk.Button(label="Reset")
+        btn_reset_folder.get_style_context().add_class("settings-action-btn")
+        btn_reset_folder.set_tooltip_text("Use your system's Downloads folder")
+        folder_row = self._settings_row("📁", "Download folder", self.get_downloads_dir(),
+                                        btn_change_folder, btn_reset_folder)
+        folder_row._bharat_subtitle.set_line_wrap(False)
+        folder_row._bharat_subtitle.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
 
-        home_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        home_entry = Gtk.Entry()
-        home_entry.set_text(self.homepage)
-        home_entry.set_placeholder_text("e.g. example.com or https://example.com")
-        home_entry.set_hexpand(True)
-        home_box.pack_start(home_entry, True, True, 0)
+        def refresh_folder():
+            folder_row._bharat_subtitle.set_text(self.get_downloads_dir())
+            btn_reset_folder.set_sensitive(bool(self.download_dir))
 
-        btn_set_home = Gtk.Button(label="Set")
-        btn_set_home.get_style_context().add_class("settings-primary-btn")
-        btn_set_home.set_tooltip_text("Save this address as your homepage")
-        home_box.pack_start(btn_set_home, False, False, 0)
-
-        btn_reset_home = Gtk.Button(label="Use Google")
-        btn_reset_home.get_style_context().add_class("settings-action-btn")
-        btn_reset_home.set_tooltip_text(f"Reset homepage to {DEFAULT_HOMEPAGE}")
-        home_box.pack_start(btn_reset_home, False, False, 0)
-        home_card.pack_start(home_box, False, False, 0)
-
-        home_status = Gtk.Label(xalign=0.0)
-        home_status.get_style_context().add_class("settings-hint-label")
-        home_card.pack_start(home_status, False, False, 0)
-
-        def _apply_homepage(new_value):
-            self.homepage = sanitize_homepage_url(new_value)
-            home_entry.set_text(self.homepage)
+        def on_reset_folder(_btn):
+            self.download_dir = ""
             self.save_settings()
-            home_status.set_text(f"✅ Homepage saved: {self.homepage}")
-            GLib.timeout_add(3000, lambda: (home_status.set_text(""), False)[1])
+            refresh_folder()
 
-        btn_set_home.connect("clicked", lambda b: _apply_homepage(home_entry.get_text()))
-        home_entry.connect("activate", lambda e: _apply_homepage(e.get_text()))
-        btn_reset_home.connect("clicked", lambda b: _apply_homepage(DEFAULT_HOMEPAGE))
+        btn_change_folder.connect("clicked", lambda b: (self.choose_download_folder(dialog), refresh_folder()))
+        btn_reset_folder.connect("clicked", on_reset_folder)
+        btn_reset_folder.set_sensitive(bool(self.download_dir))
 
-        home_card.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 2)
-        home_card.pack_start(
-            self._create_toggle_row(
-                "🚀 Open homepage on startup",
-                "When enabled, browser opens your homepage. When disabled, restores previous open tabs.",
-                self.open_homepage_on_startup,
-                lambda act: (setattr(self, 'open_homepage_on_startup', act), self.save_settings())
-            ),
-            False, False, 0
+        self._settings_section(
+            gen, "SEARCH & DOWNLOADS",
+            self._settings_row("🔍", "Search engine", "Used when what you type in the address bar isn't an address.",
+                               search_combo),
+            folder_row,
         )
-        gen_box.pack_start(home_card, False, False, 0)
 
-        typing_card = self._create_setting_card("TYPING & READING")
-        typing_card.pack_start(
-            self._create_toggle_row(
-                "✍️ Check spelling while typing",
-                "Underlines misspelled words in text boxes, using the dictionaries installed on your system.",
-                self.spellcheck_enabled,
-                self.on_spellcheck_toggled
-            ),
-            False, False, 0
+        self._settings_section(
+            gen, "APPEARANCE & READING",
+            switch("dark_mode_active", "🌙", "Dark mode for websites",
+                   "Recolours bright pages dark. Same as the moon button on the toolbar.",
+                   lambda act: act != self.dark_mode_active and self.on_dark_clicked(self.btn_dark)),
+            switch("spellcheck_enabled", "✍️", "Check spelling while typing",
+                   "Underlines misspelled words in text boxes, using the dictionaries installed on your system.",
+                   self.on_spellcheck_toggled),
+            self._settings_row("📖", "Reader mode",
+                               "Press Ctrl+Alt+R on an article for a clean page with adjustable text size and themes."),
         )
-        typing_card.pack_start(self._hint("Tip: press Ctrl+Alt+R on an article for a clean, distraction-free Reader mode."), False, False, 0)
-        gen_box.pack_start(typing_card, False, False, 0)
-        stack.add_titled(gen_scroller, "general", "🌐 General")
 
-        # --- Tab 2: Privacy & Security ------------------------------------
-        priv_scroller, priv_box = _create_scrollable_page()
+        # --- Privacy & Security ---------------------------------------------
+        priv = add_page("privacy", "🛡️  Privacy & Security", "Privacy & Security",
+                        "Protection is on from the first launch. Use the 🔒 icon in the address bar "
+                        "to change these for a single site.")
 
-        shield_card = self._create_setting_card("SHIELD & PROTECTION")
-        shield_card.pack_start(
-            self._create_toggle_row(
-                "🛡️ Ad & Tracker Blocking",
-                "Blocks known ad networks, telemetry, and tracking scripts with high throughput.",
-                self.adblock_enabled,
-                lambda act: (setattr(self, 'adblock_enabled', act), self.save_settings())
-            ),
-            False, False, 0
-        )
-        shield_card.pack_start(
-            self._create_toggle_row(
-                "🔗 Strip Tracking Parameters (ClearURLs)",
-                "Removes utm_*, fbclid, gclid, and other analytics parameters from URLs.",
-                self.clearurls_enabled,
-                lambda act: (setattr(self, 'clearurls_enabled', act), self.save_settings())
-            ),
-            False, False, 0
-        )
-        shield_card.pack_start(
-            self._create_toggle_row(
-                "🔒 HTTPS Enforcement",
-                "Automatically upgrades unencrypted HTTP connections to secure HTTPS.",
-                self.https_enabled,
-                lambda act: (setattr(self, 'https_enabled', act), self.save_settings())
-            ),
-            False, False, 0
-        )
-        shield_card.pack_start(
-            self._create_toggle_row(
-                "🎥 WebRTC / Camera & Mic Access",
-                "Off by default — WebRTC can leak your real local IP address even when using VPN.",
-                self.webrtc_enabled,
-                lambda act: self.on_webrtc_toggled(act)
-            ),
-            False, False, 0
-        )
-        priv_box.pack_start(shield_card, False, False, 0)
-
-        hist_card = self._create_setting_card("HISTORY & DISPLAY PRIVACY")
-        hist_card.pack_start(
-            self._create_toggle_row(
-                "🧹 Clear Browsing History on Exit",
-                "Automatically wipes browsing history and autocomplete suggestions when exiting.",
-                self.clear_history_on_exit,
-                lambda act: (setattr(self, 'clear_history_on_exit', act), self.save_settings())
-            ),
-            False, False, 0
-        )
-        hist_card.pack_start(
-            self._create_toggle_row(
-                "🌙 DarkReader High-Contrast Engine",
-                "Applies smart dark contrast stylesheets to all visited webpages.",
-                self.dark_mode_active,
-                lambda act: self.on_dark_clicked(self.btn_dark)
-            ),
-            False, False, 0
-        )
-        priv_box.pack_start(hist_card, False, False, 0)
-
-        tracker_card = self._create_setting_card("TRACKER LISTS")
-        tracker_card.pack_start(
-            self._create_toggle_row(
-                "🛰️ Keep tracker lists up to date",
-                "Downloads the EasyPrivacy list from easylist.to about once a week and blocks those third-party trackers. "
-                "Only whole-domain rules are used, and sign-in/captcha services are never blocked.",
-                self.tracker_lists_enabled,
-                self.on_tracker_lists_toggled
-            ),
-            False, False, 0
-        )
-        tracker_status = Gtk.Label(xalign=0.0)
-        tracker_status.set_text(self._tracker_status_text())
-        tracker_status.get_style_context().add_class("settings-hint-label")
-        tracker_card.pack_start(tracker_status, False, False, 0)
-        btn_tracker_update = Gtk.Button(label="🔄 Update tracker list now")
-        btn_tracker_update.get_style_context().add_class("settings-action-btn")
+        tracker_row = self._settings_button_row("🛰️", "Tracker list", self._tracker_status_text(),
+                                                "Update now", lambda: None)
+        btn_tracker_update = tracker_row._bharat_button
 
         def _tracker_update_clicked(_btn):
             btn_tracker_update.set_sensitive(False)
-            tracker_status.set_text("Downloading…")
+            tracker_row._bharat_subtitle.set_text("Downloading…")
 
             def done(error):
                 btn_tracker_update.set_sensitive(True)
-                tracker_status.set_text(f"❌ Update failed: {error}" if error else "✅ " + self._tracker_status_text())
+                tracker_row._bharat_subtitle.set_text(
+                    f"❌ Update failed: {error}" if error else "✅ " + self._tracker_status_text())
 
             self.refresh_tracker_list_async(done)
 
         btn_tracker_update.connect("clicked", _tracker_update_clicked)
-        tracker_card.pack_start(btn_tracker_update, False, False, 0)
-        priv_box.pack_start(tracker_card, False, False, 0)
+        btn_tracker_update.set_sensitive(not self.is_private)
 
-        sites_card = self._create_setting_card("SITES, PASSWORDS & REPORT")
-        sites_card.pack_start(
-            self._create_toggle_row(
-                "🔑 Offer to save passwords",
-                "Saved in your system keyring (GNOME Keyring, KWallet or KeePassXC), never in Bharat Browser's own files. "
-                "Not used in private windows.",
-                self.passwords_enabled,
-                self.on_passwords_toggled
-            ),
-            False, False, 0
+        self._settings_section(
+            priv, "TRACKING PROTECTION",
+            switch("adblock_enabled", "🛡️", "Block ads and trackers",
+                   "Stops known ad and tracking servers on every site. Sign-in pages and captchas keep working.",
+                   store("adblock_enabled")),
+            switch("tracker_lists_enabled", "🔄", "Keep the tracker list up to date",
+                   "Downloads the EasyPrivacy list from easylist.to about once a week.",
+                   self.on_tracker_lists_toggled),
+            tracker_row,
+            switch("clearurls_enabled", "🔗", "Remove tracking tags from links",
+                   "Strips utm_*, fbclid, gclid and similar tags from addresses before they load.",
+                   store("clearurls_enabled")),
         )
-        for label_text, handler in (
-            ("🔑 Manage saved passwords…", lambda b: self.open_password_manager(dialog)),
-            ("🌐 Manage site settings & permissions…", lambda b: self.open_site_settings_manager(dialog)),
-            ("📊 Open my Privacy Report", lambda b: (dialog.destroy(), self.open_privacy_report())),
-        ):
-            site_btn = Gtk.Button(label=label_text)
-            site_btn.get_style_context().add_class("settings-action-btn")
-            site_btn.connect("clicked", handler)
-            sites_card.pack_start(site_btn, False, False, 0)
-        priv_box.pack_start(sites_card, False, False, 0)
-        stack.add_titled(priv_scroller, "privacy", "🛡️ Privacy")
 
-        # --- Tab 3: Performance & Advanced --------------------------------
-        perf_scroller, perf_box = _create_scrollable_page()
-
-        perf_card = self._create_setting_card("RESOURCE OPTIMIZATION")
-        perf_card.pack_start(
-            self._create_toggle_row(
-                "😴 Suspend Inactive Background Tabs",
-                "Frees memory by unloading background tabs inactive for 15+ minutes while keeping history intact.",
-                self.tab_suspension_enabled,
-                lambda act: (setattr(self, 'tab_suspension_enabled', act), self.save_settings())
-            ),
-            False, False, 0
+        self._settings_section(
+            priv, "CONNECTIONS",
+            switch("https_enabled", "🔒", "Always use secure connections (HTTPS)",
+                   "Upgrades http:// addresses to https://. If a site has no secure version, you're asked before continuing.",
+                   store("https_enabled")),
+            switch("webrtc_enabled", "🎥", "Allow camera, microphone and WebRTC",
+                   "Off by default: WebRTC can reveal your real IP address, even behind a VPN. Turn on for video calls.",
+                   self.on_webrtc_toggled),
         )
-        perf_card.pack_start(
-            self._create_toggle_row(
-                "🪶 Low Memory Mode",
-                "Shrinks WebKit page cache size immediately for systems with limited RAM.",
-                self.low_memory_mode,
-                lambda act: self.on_low_memory_mode_toggled(act)
-            ),
-            False, False, 0
+
+        self._settings_section(
+            priv, "PASSWORDS",
+            switch("passwords_enabled", "🔑", "Offer to save passwords",
+                   "Kept in your system keyring (GNOME Keyring, KWallet or KeePassXC), never in the browser's own "
+                   "files, and filled only when you click. Never offered in private windows.",
+                   self.on_passwords_toggled),
+            self._settings_button_row("🗝️", "Saved passwords", "See, copy or delete the passwords you've saved.",
+                                      "Manage…", lambda: self.open_password_manager(dialog)),
         )
-        perf_box.pack_start(perf_card, False, False, 0)
 
-        gpu_card = self._create_setting_card("GPU ACCELERATION")
-        gpu_detected_lbl = Gtk.Label(xalign=0.0)
-        gpu_detected_lbl.set_markup(f"<small>Detected: {GLib.markup_escape_text(self.gpu_info_label)}</small>")
-        gpu_detected_lbl.get_style_context().add_class("settings-hint-label")
-        gpu_detected_lbl.set_line_wrap(True)
-        gpu_card.pack_start(gpu_detected_lbl, False, False, 0)
-        gpu_card.pack_start(
-            self._create_toggle_row(
-                "🎮 Use GPU for Rendering",
-                "Offloads page compositing, canvas, and WebGL to the GPU instead of system RAM. Turn off only if pages render incorrectly (software fallback, uses more RAM/CPU).",
-                self.gpu_acceleration_enabled,
-                lambda act: self.on_gpu_acceleration_toggled(act)
-            ),
-            False, False, 0
+        self._settings_section(
+            priv, "SITES",
+            self._settings_button_row("🌐", "Site settings and permissions",
+                                      "Camera, location, notifications, JavaScript, ads and zoom you've set per site.",
+                                      "Manage…", lambda: self.open_site_settings_manager(dialog)),
+            self._settings_button_row("📊", "Privacy report", "What the browser has blocked and upgraded for you.",
+                                      "Open", lambda: close_then(self.open_privacy_report)),
         )
-        perf_box.pack_start(gpu_card, False, False, 0)
 
-        dev_card = self._create_setting_card("DEVELOPER TOOLS")
-        dev_card.pack_start(
-            self._create_toggle_row(
-                "🛠️ Developer Tools (Web Inspector)",
-                "Enables right-click Inspect Element and developer debugging tools.",
-                self.dev_tools_enabled,
-                lambda act: self.on_devtools_toggled(act)
-            ),
-            False, False, 0
+        # --- History & Data ---------------------------------------------------
+        data = add_page("data", "🗂️  History & Data", "History & Data",
+                        "Your browsing history, cookies and cached files, and bringing data in from another browser.")
+
+        def _confirm_clear():
+            confirm = Gtk.MessageDialog(
+                transient_for=dialog,
+                modal=True,
+                destroy_with_parent=True,
+                message_type=Gtk.MessageType.WARNING,
+                buttons=Gtk.ButtonsType.NONE,
+                text="Clear history, cookies and cache?",
+            )
+            confirm.get_style_context().add_class("bharat-dialog")
+            confirm.format_secondary_text("You'll be signed out of most websites. "
+                                          "Bookmarks and saved passwords are kept.")
+            confirm.add_button("Cancel", Gtk.ResponseType.CANCEL)
+            clear_btn = confirm.add_button("Clear", Gtk.ResponseType.ACCEPT)
+            clear_btn.get_style_context().add_class("settings-danger-btn")
+            confirm.set_default_response(Gtk.ResponseType.CANCEL)
+            response = confirm.run()
+            confirm.destroy()
+            if response == Gtk.ResponseType.ACCEPT:
+                self.on_clear_cache_clicked(None)
+
+        self._settings_section(
+            data, "HISTORY",
+            switch("clear_history_on_exit", "🧹", "Clear history when closing",
+                   "Erases browsing history and address-bar suggestions each time you quit.",
+                   store("clear_history_on_exit")),
+            self._settings_button_row("🕘", "Browsing history", "Search and revisit pages you've opened (Ctrl+H).",
+                                      "Open", lambda: close_then(self.open_history_tab)),
         )
-        perf_box.pack_start(dev_card, False, False, 0)
-        stack.add_titled(perf_scroller, "performance", "⚡ Performance")
 
-        # --- Tab 4: Data & Actions ----------------------------------------
-        act_scroller, act_box = _create_scrollable_page()
-
-        data_card = self._create_setting_card("BROWSING DATA MANAGEMENT")
-        btn_hist = Gtk.Button(label="📊 Open Browsing History Dashboard (Ctrl+H)")
-        btn_hist.get_style_context().add_class("settings-action-btn")
-        btn_hist.connect("clicked", lambda b: (self.open_history_tab(), dialog.destroy()))
-        data_card.pack_start(btn_hist, False, False, 0)
-
-        btn_clear = Gtk.Button(label="🗑️ Clear Browsing History & Cookies Now")
-        btn_clear.get_style_context().add_class("settings-danger-btn")
-        btn_clear.connect("clicked", self.on_clear_cache_clicked)
-        data_card.pack_start(btn_clear, False, False, 0)
-        act_box.pack_start(data_card, False, False, 0)
-
-        import_card = self._create_setting_card("IMPORT FROM OTHER BROWSERS")
-        import_card.pack_start(self._hint("Bring your bookmarks and history from Firefox, Chrome, Chromium, Brave, Edge, "
-                                          "Vivaldi or Opera, or from an exported bookmarks .html file."), False, False, 0)
-        btn_import = Gtk.Button(label="📥 Import bookmarks & history…")
-        btn_import.get_style_context().add_class("settings-primary-btn")
-        btn_import.set_sensitive(not self.is_private)
-        btn_import.connect("clicked", lambda b: self.open_import_dialog(dialog))
-        import_card.pack_start(btn_import, False, False, 2)
-        act_box.pack_start(import_card, False, False, 0)
-
-        window_card = self._create_setting_card("WINDOW & NAVIGATION")
-        btn_private = Gtk.Button(label="🕵 Open New Private Window (Ctrl+Shift+N)")
-        btn_private.get_style_context().add_class("settings-action-btn")
-        btn_private.connect("clicked", lambda b: (self.open_private_window(), dialog.destroy()))
-        window_card.pack_start(btn_private, False, False, 0)
-        act_box.pack_start(window_card, False, False, 0)
-
-        about_card = self._create_setting_card("UPDATES & ABOUT BHARAT BROWSER")
-        about_lbl = Gtk.Label(xalign=0.0)
-        about_lbl.set_markup(
-            f"<b>Bharat Browser v{self.current_version}</b>\n"
-            f"<small>Modern, Ultra-Fast &amp; Privacy-First Linux Browser\n"
-            f"Engineered in INDIA "
-            "<span foreground='#ff9933'>▰</span><span foreground='#e2e8f0'>▰</span><span foreground='#138808'>▰</span></small>"
+        self._settings_section(
+            data, "CLEAR BROWSING DATA",
+            self._settings_button_row("🗑️", "Clear history, cookies and cache",
+                                      "Signs you out of most sites. Bookmarks and saved passwords are kept.",
+                                      "Clear now…", _confirm_clear, style="settings-danger-btn"),
         )
-        about_lbl.get_style_context().add_class("settings-hint-label")
-        about_card.pack_start(about_lbl, False, False, 0)
 
+        import_row = self._settings_button_row(
+            "📥", "Import from another browser",
+            "Bookmarks and history from Firefox, Chrome, Chromium, Brave, Edge, Vivaldi or Opera, "
+            "or from an exported bookmarks .html file.",
+            "Import…", lambda: self.open_import_dialog(dialog))
+        import_row._bharat_button.set_sensitive(not self.is_private)
+        self._settings_section(data, "IMPORT", import_row)
+
+        # --- Performance ------------------------------------------------------
+        perf = add_page("performance", "⚡  Performance", "Performance",
+                        "Keep the browser light on memory, especially on older computers.")
+        self._settings_section(
+            perf, "MEMORY",
+            switch("tab_suspension_enabled", "😴", "Sleep inactive tabs",
+                   "Unloads tabs you haven't looked at for 15 minutes. They reload, with their history, when you click them.",
+                   store("tab_suspension_enabled")),
+            switch("low_memory_mode", "🪶", "Low Memory Mode",
+                   "Uses a much smaller page cache so the browser needs less RAM. Going back a page may reload it.",
+                   self.on_low_memory_mode_toggled),
+            self._settings_button_row("📈", "Tab Memory", "See which tab is using the most memory, then suspend or close it.",
+                                      "Open", lambda: close_then(self.open_tab_memory)),
+        )
+
+        # --- Advanced ---------------------------------------------------------
+        adv = add_page("advanced", "🛠️  Advanced", "Advanced",
+                       "Settings most people never need to change.")
+        self._settings_section(
+            adv, "GRAPHICS",
+            switch("gpu_acceleration_enabled", "🎮", "Use hardware acceleration",
+                   "Draws pages, canvas and WebGL on the GPU. Turn off only if pages look broken; "
+                   "software drawing uses more CPU and RAM.",
+                   self.on_gpu_acceleration_toggled),
+            self._settings_row("🖥️", "Detected graphics", self.gpu_info_label),
+        )
+        self._settings_section(
+            adv, "DEVELOPERS",
+            switch("dev_tools_enabled", "🧰", "Developer tools",
+                   "Adds Inspect Element to the right-click menu for debugging web pages.",
+                   self.on_devtools_toggled),
+        )
+
+        # --- About ------------------------------------------------------------
+        about = add_page("about", "ℹ️  About", "About",
+                         "A tiny, privacy-first browser for Linux, built on WebKitGTK. Made in India.")
+
+        hero = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        hero.get_style_context().add_class("settings-row")
+        if self.icon_path:
+            try:
+                hero_pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(self.icon_path, 64, 64, True)
+                hero.pack_start(Gtk.Image.new_from_pixbuf(hero_pb), False, False, 0)
+            except Exception as e:
+                print("Settings logo note:", e)
+        hero_text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        hero_text.set_valign(Gtk.Align.CENTER)
+        hero_name = Gtk.Label(label="Bharat Browser", xalign=0.0)
+        hero_name.get_style_context().add_class("settings-page-title")
+        hero_text.pack_start(hero_name, False, False, 0)
         chips = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         for chip_text, chip_class in (
             (f"v{self.current_version}", None),
@@ -4991,39 +4978,37 @@ class BharatBrowserWindow(Gtk.Window):
             if chip_class:
                 chip.get_style_context().add_class(chip_class)
             chips.pack_start(chip, False, False, 0)
-        about_card.pack_start(chips, False, False, 2)
+        hero_text.pack_start(chips, False, False, 0)
+        hero.pack_start(hero_text, True, True, 0)
+        self._settings_section(about, "VERSION", hero)
 
-        about_card.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 2)
-
-        update_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        btn_check_update = Gtk.Button(label="🔄 Check for Updates on GitHub")
-        btn_check_update.get_style_context().add_class("settings-primary-btn")
-        update_vbox.pack_start(btn_check_update, False, False, 0)
-
-        update_status_lbl = Gtk.Label(xalign=0.0)
-        update_status_lbl.get_style_context().add_class("settings-hint-label")
-        update_status_lbl.set_line_wrap(True)
-        update_vbox.pack_start(update_status_lbl, False, False, 0)
-
-        btn_restart_applied = Gtk.Button(label="🚀 Restart Now to Apply Update")
+        update_row = self._settings_button_row(
+            "🔄", "Check for updates",
+            "Updates come from GitHub and are installed only if they carry the project's signature.",
+            "Check now", lambda: None, style="settings-primary-btn")
+        btn_check_update = update_row._bharat_button
+        btn_restart_applied = Gtk.Button(label="🚀 Restart now to finish updating")
         btn_restart_applied.get_style_context().add_class("settings-primary-btn")
+        btn_restart_applied.set_halign(Gtk.Align.START)
+        btn_restart_applied.set_margin_start(60)
+        btn_restart_applied.set_margin_bottom(12)
         btn_restart_applied.set_no_show_all(True)
         btn_restart_applied.hide()
-        btn_restart_applied.connect("clicked", lambda b: (dialog.destroy(), self.restart_application()))
-        update_vbox.pack_start(btn_restart_applied, False, False, 0)
-
+        btn_restart_applied.connect("clicked", lambda b: close_then(self.restart_application))
+        update_block = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        update_block.pack_start(update_row, False, False, 0)
+        update_block.pack_start(btn_restart_applied, False, False, 0)
         btn_check_update.connect(
             "clicked",
-            lambda b: self.check_for_updates_interactive(update_status_lbl, btn_check_update, btn_restart_applied)
+            lambda b: self.check_for_updates_interactive(update_row._bharat_subtitle, btn_check_update, btn_restart_applied)
         )
-        about_card.pack_start(update_vbox, False, False, 0)
-        act_box.pack_start(about_card, False, False, 0)
+        self._settings_section(about, "UPDATES", update_block)
 
-        stack.add_titled(act_scroller, "actions", "🗄️ Data & Actions")
-
-        dialog.show_all()
-        dialog.run()
-        dialog.destroy()
+        content_area.show_all()
+        if page:
+            stack.set_visible_child_name(page)
+        dialog._bharat_stack = stack
+        return dialog
 
     def on_spellcheck_toggled(self, active):
         self.spellcheck_enabled = active

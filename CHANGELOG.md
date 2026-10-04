@@ -3,6 +3,19 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.5.0] - 2026-10-04
+
+### Changed
+- **Redesigned Settings.** A sidebar now replaces the tab bar and the large banner, and settings are split across six pages: **General**, **Privacy & Security**, **History & Data**, **Performance**, **Advanced** and **About**. Each setting is a row with a plain-language note on what it really does. Several settings moved to the page where you'd expect them: dark mode is under General (it used to be under Privacy), developer tools under Advanced (it used to be under Performance), and update checks under About (they used to be under "Data & Actions").
+- Settings closes with the × in the title bar or Esc. "Open New Private Window" is no longer repeated in Settings; it stays in the main menu and on Ctrl+Shift+N.
+
+### Added
+- **Download folder** in Settings → General (previously only in the Downloads window).
+- **Tab Memory** can be opened from Settings → Performance.
+
+### Fixed
+- "Clear history, cookies and cache" used to clear everything on a single click. It now asks first and says what is kept (bookmarks and saved passwords).
+
 ## [1.4.5] - 2026-10-04
 
 ### Fixed
