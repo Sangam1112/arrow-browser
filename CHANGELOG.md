@@ -3,6 +3,15 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.5.4] - 2026-10-05
+
+### Fixed
+- **"Always use secure connections (HTTPS)" did nothing.** Pages stayed on `http://` while the Privacy Report counted them as upgraded. The browser changed the address after WebKit had already decided what to load, and WebKit ignores that. Addresses are now upgraded before the page starts loading: ones you type, new tabs, bookmarks, restored tabs, links opened from other apps, and the first page of a tab a site opens. If a site has no secure version, the "Secure connection unavailable" page now really appears and you choose whether to continue over HTTP. Local-network addresses (routers, printers) still stay on `http://`.
+- **"Remove tracking tags from links" did nothing either**, for the same reason: sites still received `utm_…`, `fbclid`, `gclid` and similar tags. They are now removed from the same addresses before loading. Links you click inside a page are still sent as they are: WebKit reports a click inside an embedded frame the same way as a click on the page, so changing those could replace the whole page with the frame. The Privacy Report now counts only addresses that really changed.
+- **Downloads got the wrong name, and failed downloads showed as completed.** A file the site calls "Report.pdf" but serves from an address like `…/download?id=7` was saved as `download`, without its extension. Downloads now use the name the site gives. An address with spaces or `#` in it could also lose the file while still saying "Completed ✅". A download that fails, or whose connection drops part-way, now shows "Failed ❌".
+- **Links opened from other apps opened the browser without the link.** Clicking a link in an email or chat app, with Bharat Browser as the default browser, only restored your last session. The link now opens in a new tab after your restored tabs.
+- The address bar now says "Search DuckDuckGo…" (or whichever engine you chose) instead of always "Search Google…".
+
 ## [1.5.3] - 2026-10-05
 
 ### Fixed

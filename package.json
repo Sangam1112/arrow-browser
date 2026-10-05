@@ -1,6 +1,6 @@
 {
   "name": "bharat-browser",
-  "version": "1.5.3",
-  "sha256": "7903bc0dc3638dbfcede7e422cd1eefa0ecb03af6f2666f2838f374898b8ac0b",
-  "signature": "ebd0ae5b6d9a25b0fef47f5df2f83812626530c5d0eb8ac194ca754edb289de79d1abbf8cf72e0e0c4ad7a1a1724d5c0826c144c2f0dc480bd5ee131ef7b3203"
+  "version": "1.5.4",
+  "sha256": "19a74af60c7022d62ac7fc1168989e8508f6a467a4ef2f468d1797f3141bfe98",
+  "signature": "550098355dc08cc246e6722424094295965eef110826bb53ded8936a755af88a84cc84e3757ed610c0bdd97a15e85f276ae2b6697f116a5bcaf9bfe44e62c500"
 }
