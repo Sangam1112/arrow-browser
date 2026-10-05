@@ -53,10 +53,13 @@ chmod +x "$INSTALL_DIR/bharat_browser.py"
 
 cat << 'EOF' > "$BIN_DIR/bharat-browser"
 #!/bin/bash
+# Start through an import so Python reuses the compiled code it keeps in __pycache__: running
+# bharat_browser.py directly would recompile all of it on every launch (~0.25 s).
+run() { exec python3 -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("bharat_browser", run_name="__main__", alter_sys=True)' "$@"; }
 if [ -f "${HOME}/.local/share/bharat-browser/bharat_browser.py" ]; then
-    exec python3 "${HOME}/.local/share/bharat-browser/bharat_browser.py" "$@"
+    run "${HOME}/.local/share/bharat-browser" "$@"
 else
-    exec python3 bharat_browser.py "$@"
+    run . "$@"
 fi
 EOF
 chmod +x "$BIN_DIR/bharat-browser"

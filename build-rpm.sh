@@ -57,6 +57,14 @@ cp -r ${BUILD_ROOT}/* %{buildroot}/
 /usr/share/applications/bharat-browser.desktop
 /usr/share/icons/hicolor/256x256/apps/bharat-browser.png
 
+# Precompile on install so launches don't recompile bharat_browser.py each time (~0.25 s): users can't
+# write a __pycache__ into /usr/share themselves. Removed again on uninstall (not on upgrade).
+%post
+python3 -m py_compile /usr/share/bharat-browser/bharat_browser.py >/dev/null 2>&1 || :
+
+%preun
+if [ \$1 -eq 0 ]; then rm -rf /usr/share/bharat-browser/__pycache__; fi
+
 %changelog
 * Mon Oct 05 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.5-1
 - EasyList ad blocking, ClearURLs link cleaning, stronger fingerprint protection, coloured lock

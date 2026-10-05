@@ -164,16 +164,19 @@ cat << 'EOF' > /tmp/bharat-browser-launcher
 #!/bin/bash
 SCRIPT_PATH="$(readlink -f "$0")"
 BIN_DIR="$(dirname "$SCRIPT_PATH")"
+# Start through an import so Python reuses the compiled code it keeps in __pycache__: running
+# bharat_browser.py directly would recompile all of it on every launch (~0.25 s).
+run() { exec python3 -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("bharat_browser", run_name="__main__", alter_sys=True)' "$@"; }
 
 # User-writable install checked first: it's the only copy the browser's
 # self-updater can actually rewrite in place. A root-owned /usr/share install
 # is left as a fallback for systems that only have the RPM installed.
 if [ -f "${HOME}/.local/share/bharat-browser/bharat_browser.py" ]; then
-    exec python3 "${HOME}/.local/share/bharat-browser/bharat_browser.py" "$@"
+    run "${HOME}/.local/share/bharat-browser" "$@"
 elif [ -f "/usr/share/bharat-browser/bharat_browser.py" ]; then
-    exec python3 /usr/share/bharat-browser/bharat_browser.py "$@"
+    run /usr/share/bharat-browser "$@"
 else
-    exec python3 bharat_browser.py "$@"
+    run . "$@"
 fi
 EOF
 chmod +x /tmp/bharat-browser-launcher

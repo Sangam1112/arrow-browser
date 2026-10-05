@@ -26,6 +26,17 @@ def _version_tuple(v):
     return tuple(out)
 
 
+# How the launchers start the browser: through an import, so Python reuses the compiled code it keeps in
+# __pycache__. Running bharat_browser.py directly would recompile all of it on every launch (~0.25 s).
+LAUNCH_SNIPPET = ('import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); '
+                  'runpy.run_module("bharat_browser", run_name="__main__", alter_sys=True)')
+
+
+def launch_argv(script, args=()):
+    """The command that starts the browser from `script` the way the launchers do."""
+    return [sys.executable, "-c", LAUNCH_SNIPPET, os.path.dirname(os.path.abspath(script))] + list(args)
+
+
 def _prefer_newest_copy():
     """If this is the per-user updated copy and the system package has since been upgraded past it, drop this
     stale copy and start the system one, so an old per-user copy can never shadow a newer package."""
@@ -38,7 +49,7 @@ def _prefer_newest_copy():
             m = re.search(r'^APP_VERSION = "([^"]+)"', f.read(), re.M)
         if m and _version_tuple(m.group(1)) > _version_tuple(APP_VERSION):
             os.remove(here)
-            os.execv(sys.executable, [sys.executable, SYSTEM_SCRIPT] + sys.argv[1:])
+            os.execv(sys.executable, launch_argv(SYSTEM_SCRIPT, sys.argv[1:]))
     except Exception:
         pass
 
@@ -1107,18 +1118,48 @@ def load_tracker_list_cache():
         return set(), 0.0
 
 
-def tracker_list_is_stale(now=None):
-    """True when the block lists should be downloaded again: older than a week, or fetched from a different
-    set of lists (e.g. EasyPrivacy only, before EasyList was added)."""
+def tracker_list_summary():
+    """{"fetched", "sources", "count"} for the downloaded block lists, or None. Read from a small summary file
+    kept next to the list, so a normal launch never loads ~94,000 domains (~9 MB) just to learn which compiled
+    filter to use: WebKit already has that saved. The summary is rebuilt from the list whenever the list file
+    changed since it was written."""
+    try:
+        st = os.stat(TRACKER_LIST_CACHE)
+    except OSError:
+        return None
+    key = [st.st_mtime_ns, st.st_size]
+    summary_path = os.path.splitext(TRACKER_LIST_CACHE)[0] + "-summary.json"
+    try:
+        with open(summary_path, "r", encoding="utf-8") as f:
+            summary = json.load(f)
+        if summary.get("list") == key:
+            return summary
+    except Exception:
+        pass
     try:
         with open(TRACKER_LIST_CACHE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        # Caches from before 1.5.5 have no "sources": they hold EasyPrivacy alone.
-        sources = data.get("sources", [TRACKER_LIST_URLS[0]])
-        fetched = float(data.get("fetched", 0))
+        summary = {"list": key, "fetched": float(data.get("fetched", 0)),
+                   # Caches from before 1.5.5 have no "sources": they hold EasyPrivacy alone.
+                   "sources": data.get("sources", [TRACKER_LIST_URLS[0]]),
+                   "count": sum(1 for d in data.get("domains", []) if isinstance(d, str))}
     except Exception:
+        return None
+    try:
+        _write_json_private(summary_path, summary, indent=None)
+    except Exception:
+        pass
+    return summary
+
+
+def tracker_list_is_stale(now=None):
+    """True when the block lists should be downloaded again: older than a week, or fetched from a different
+    set of lists (e.g. EasyPrivacy only, before EasyList was added)."""
+    summary = tracker_list_summary()
+    if summary is None:
         return True
-    return sources != list(TRACKER_LIST_URLS) or (now or time.time()) - fetched > TRACKER_LIST_MAX_AGE
+    return (summary["sources"] != list(TRACKER_LIST_URLS)
+            or (now or time.time()) - summary["fetched"] > TRACKER_LIST_MAX_AGE)
 
 
 def _download_capped(url, max_bytes, timeout, agent):
@@ -2694,29 +2735,30 @@ class BharatBrowserWindow(Gtk.Window):
             store_dir = os.path.join(CACHE_DIR, "content-filters")
             os.makedirs(store_dir, exist_ok=True)
             store = WebKit2.UserContentFilterStore.new(store_dir)
-            extra, fetched = load_tracker_list_cache() if self.tracker_lists_enabled else (set(), 0.0)
-            full_id = self.BASE_FILTER_ID + (f"-{int(fetched)}-{len(extra)}" if extra else "")
+            summary = tracker_list_summary() if self.tracker_lists_enabled else None
+            count = summary["count"] if summary else 0
+            full_id = self.BASE_FILTER_ID + (f"-{int(summary['fetched'])}-{count}" if count else "")
             keep = {self.BASE_FILTER_ID, full_id}
             if self.content_filter is None:
-                self._load_or_compile_filter(store, self.BASE_FILTER_ID, set(), keep)
-            if extra:
-                self._load_or_compile_filter(store, full_id, extra, keep)
+                self._load_or_compile_filter(store, self.BASE_FILTER_ID, 0, keep)
+            if count:
+                self._load_or_compile_filter(store, full_id, count, keep)
         except Exception as e:
             print("Content filter compile note:", e)
 
-    def _load_or_compile_filter(self, store, identifier, extra, keep):
-        store.load(identifier, None, self._on_content_filter_loaded, (store, identifier, extra, keep))
+    def _load_or_compile_filter(self, store, identifier, rank, keep):
+        store.load(identifier, None, self._on_content_filter_loaded, (store, identifier, rank, keep))
 
     def _on_content_filter_loaded(self, store, result, data):
-        _, identifier, extra, keep = data
+        _, identifier, rank, keep = data
         try:
-            self._install_content_filter(store, store.load_finish(result), len(extra), keep)
+            self._install_content_filter(store, store.load_finish(result), rank, keep)
         except Exception:
-            # Not compiled yet (first run, or the tracker list changed): compile in the background.
+            # Not compiled yet (first run, or the lists changed): compile in the background. Only now are
+            # the downloaded domains read in; a launch that finds the compiled filter never needs them.
             try:
-                rules = build_content_blocker_rules_json(extra)
-                store.save(identifier, GLib.Bytes.new(rules), None, self._on_content_filter_saved,
-                           (len(extra), keep))
+                rules = build_content_blocker_rules_json(load_tracker_list_cache()[0] if rank else ())
+                store.save(identifier, GLib.Bytes.new(rules), None, self._on_content_filter_saved, (rank, keep))
             except Exception as e:
                 print("Content filter compile note:", e)
 
@@ -4588,7 +4630,7 @@ class BharatBrowserWindow(Gtk.Window):
         try:
             script = getattr(self, '_installed_script_path', None) or os.path.abspath(__file__)
             # No arguments: links the browser was started with are already in the saved session.
-            os.execv(sys.executable, [sys.executable, script])
+            os.execv(sys.executable, launch_argv(script))
         except Exception as e:
             print("Restart failed:", e)
 
@@ -6673,13 +6715,13 @@ td.c{{text-align:right;color:#cbd5e1;width:70px}}td.b{{width:30%}}td.b span{{dis
     # Tracker list updates
     # ------------------------------------------------------------------
     def _tracker_status_text(self):
-        domains, fetched = load_tracker_list_cache()
-        if not domains:
+        summary = tracker_list_summary()
+        if not summary or not summary["count"]:
             return "Not downloaded yet."
-        days = int((time.time() - fetched) // 86400)
+        days = int((time.time() - summary["fetched"]) // 86400)
         age = "today" if days <= 0 else f"{days} day{'s' if days != 1 else ''} ago"
         rules = len(load_url_rules_cache(block=False)[0])
-        return f"{len(domains):,} ad and tracker domains" + (f", {rules} link-cleaning rules" if rules else "") + f" • updated {age}"
+        return f"{summary['count']:,} ad and tracker domains" + (f", {rules} link-cleaning rules" if rules else "") + f" • updated {age}"
 
     def _maybe_refresh_tracker_list(self):
         if self.tracker_lists_enabled and not self.is_private:

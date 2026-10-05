@@ -59,6 +59,20 @@ Description: Modern, Ultra-Fast, and Privacy-First Web Browser
  dark mode, all built in-house.
 EOF
 
+# Precompile on install so launches don't recompile bharat_browser.py each time (~0.25 s): users can't write
+# a __pycache__ into /usr/share themselves. A failure here must never fail the install.
+cat <<'EOF' > "${BUILD_ROOT}/DEBIAN/postinst"
+#!/bin/sh
+python3 -m py_compile /usr/share/bharat-browser/bharat_browser.py >/dev/null 2>&1 || true
+exit 0
+EOF
+cat <<'EOF' > "${BUILD_ROOT}/DEBIAN/prerm"
+#!/bin/sh
+rm -rf /usr/share/bharat-browser/__pycache__
+exit 0
+EOF
+chmod 755 "${BUILD_ROOT}/DEBIAN/postinst" "${BUILD_ROOT}/DEBIAN/prerm"
+
 DEB_ROOT="/tmp/deb_pkg_${PKG_NAME}"
 rm -rf "$DEB_ROOT"
 mkdir -p "$DEB_ROOT"

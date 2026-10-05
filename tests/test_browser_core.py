@@ -336,6 +336,29 @@ class TrackerListFetchTests(TmpDirCase):
             bb.fetch_tracker_list((good, self.list_url("easylist.txt", ["only.example"])))
         self.assertEqual(bb.load_tracker_list_cache(), ({"old.example"}, 5.0))
 
+    def test_summary_spares_reading_the_whole_list(self):
+        self.assertIsNone(bb.tracker_list_summary())
+        write_json(bb.TRACKER_LIST_CACHE, {"fetched": 7, "domains": ["a.example", "b.example", 3]})
+        summary = bb.tracker_list_summary()
+        self.assertEqual((summary["fetched"], summary["count"], summary["sources"]), (7.0, 2, [bb.TRACKER_LIST_URLS[0]]))
+        summary_path = os.path.join(self.tmp, "t-summary.json")
+        self.assertTrue(os.path.exists(summary_path))
+        with open(bb.TRACKER_LIST_CACHE, "r+") as f:  # same size and time: the list itself must not be read again
+            st = os.stat(f.name)
+            text = f.read().replace("a.example", "x.example")
+            f.seek(0)
+            f.write(text)
+        os.utime(bb.TRACKER_LIST_CACHE, ns=(st.st_atime_ns, st.st_mtime_ns))
+        os.chmod(bb.TRACKER_LIST_CACHE, 0)
+        try:
+            self.assertEqual(bb.tracker_list_summary()["count"], 2, "answered from the summary file")
+        finally:
+            os.chmod(bb.TRACKER_LIST_CACHE, 0o600)
+        write_json(bb.TRACKER_LIST_CACHE, {"fetched": 9, "sources": ["s"], "domains": ["only.example"]})
+        self.assertEqual(bb.tracker_list_summary()["count"], 1, "a changed list is summarised again")
+        write_json(summary_path, "garbage")
+        self.assertEqual(bb.tracker_list_summary()["fetched"], 9.0)
+
     def test_staleness(self):
         now = time.time()
         self.assertTrue(bb.tracker_list_is_stale(now), "nothing downloaded yet")
@@ -419,6 +442,42 @@ class UrlRulesTests(TmpDirCase):
         self.assertIs(bb.load_url_rules_cache()[0], rules, "compiled once, not on every navigation")
         self.assertIs(bb.load_url_rules_cache(block=False)[0], rules)
         self.assertEqual(bb.sanitize_url("https://site7.example/?sid=1&a=2", rules), "https://site7.example/?a=2")
+
+
+class LaunchTests(TmpDirCase):
+    """Every way of starting the browser goes through the same import-based start, so the compiled code
+    in __pycache__ is reused instead of recompiling bharat_browser.py on each launch."""
+    LAUNCHERS = ("bharat-browser", "install-ubuntu.sh", "install-fedora.sh", "install-wsl.sh")
+
+    def fake_app(self, directory):
+        os.makedirs(directory, exist_ok=True)
+        write_text(os.path.join(directory, "bharat_browser.py"),
+                   "import sys, json\nif __name__ == '__main__':\n    print(json.dumps([__name__, __file__, sys.argv]))\n")
+
+    def test_launchers_share_one_start_command(self):
+        for name in self.LAUNCHERS:
+            with open(os.path.join(ROOT, name)) as f:
+                text = f.read()
+            self.assertIn("python3 -c '" + bb.LAUNCH_SNIPPET + "'", text, name)
+            self.assertNotIn("exec python3 \"", text.replace("exec python3 -c", ""), name + " still runs the file directly")
+
+    def test_start_command_runs_the_file_as_main_and_caches_it(self):
+        import subprocess
+        app = os.path.join(self.tmp, "app")
+        self.fake_app(app)
+        argv = bb.launch_argv(os.path.join(app, "bharat_browser.py"), ["--x", "https://a.example"])
+        out = json.loads(subprocess.run(argv, capture_output=True, text=True, check=True).stdout)
+        self.assertEqual(out, ["__main__", os.path.join(app, "bharat_browser.py"),
+                               [os.path.join(app, "bharat_browser.py"), "--x", "https://a.example"]])
+        self.assertTrue(any(n.startswith("bharat_browser.") for n in os.listdir(os.path.join(app, "__pycache__"))))
+
+    def test_launcher_prefers_the_per_user_copy(self):
+        import subprocess
+        user_app = os.path.join(self.tmp, ".local", "share", "bharat-browser")
+        self.fake_app(user_app)
+        out = subprocess.run(["bash", os.path.join(ROOT, "bharat-browser"), "https://b.example"],
+                             capture_output=True, text=True, check=True, env=dict(os.environ, HOME=self.tmp)).stdout
+        self.assertEqual(json.loads(out)[2], [os.path.join(user_app, "bharat_browser.py"), "https://b.example"])
 
 
 class StatsTests(TmpDirCase):

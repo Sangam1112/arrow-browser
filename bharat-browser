@@ -1,16 +1,19 @@
 #!/bin/bash
 # Bharat Browser Fedora / Linux Launcher
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Start through an import so Python reuses the compiled code it keeps in __pycache__: running
+# bharat_browser.py directly would recompile all of it on every launch (~0.25 s).
+run() { exec python3 -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("bharat_browser", run_name="__main__", alter_sys=True)' "$@"; }
 
 # User-writable install checked first: it's the only copy the browser's
 # self-updater can actually rewrite in place. A root-owned /usr/share install
 # (this RPM's own default) is left as a fallback.
 if [ -f "${HOME}/.local/share/bharat-browser/bharat_browser.py" ]; then
-    exec python3 "${HOME}/.local/share/bharat-browser/bharat_browser.py" "$@"
+    run "${HOME}/.local/share/bharat-browser" "$@"
 elif [ -f "/usr/share/bharat-browser/bharat_browser.py" ]; then
-    exec python3 /usr/share/bharat-browser/bharat_browser.py "$@"
+    run /usr/share/bharat-browser "$@"
 elif [ -f "${SCRIPT_DIR}/bharat_browser.py" ]; then
-    exec python3 "${SCRIPT_DIR}/bharat_browser.py" "$@"
+    run "${SCRIPT_DIR}" "$@"
 else
-    exec python3 bharat_browser.py "$@"
+    run . "$@"
 fi
