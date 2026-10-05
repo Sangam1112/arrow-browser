@@ -3,6 +3,18 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.5.5] - 2026-10-05
+
+### Added
+- **Real ad blocking.** The weekly list download now includes EasyList, the main ad list, alongside EasyPrivacy (trackers): about 94,000 ad and tracker domains instead of 47,000. Before, ads were only caught by a short built-in list. As before, listed domains are blocked only when another site loads them, never when you visit them yourself, and sign-in and captcha services are never blocked. Compiling the bigger list takes about 20 seconds once a week, in the background; the built-in protection stays on meanwhile. If you already had the old list, the new one is downloaded on the next launch.
+- **Much better link cleaning.** "Remove tracking tags from links" now also uses the ClearURLs rules, downloaded once a week from clearurls.xyz (not shipped in the package): hundreds of site-specific tags on Amazon, Flipkart, Google, YouTube, Reddit, LinkedIn, Instagram and about 200 other sites, on top of `utm_*`, `fbclid`, `gclid` and the like. Tracking redirects such as `google.com/url?q=…` are skipped and the real page opens directly (upgraded to HTTPS too). Affiliate and referral tags are left alone, because `?ref=` also picks the branch on GitHub. Addresses that use `#…?` for their own navigation, like Gmail, are never changed after the `#`.
+- **Stronger fingerprint protection.** Sites could still recognise your computer from how it draws a canvas image (`toDataURL`/`toBlob`), from WebGL pixels or from how it processes sound. Those readings now get tiny changes that you can't see or hear. A site gets the same changes all session, so pages keep working, but different sites and new sessions get different ones. Private windows get their own, so a site can't match a private visit to a normal one. Very small reads, as used by colour pickers, stay exact.
+- **The lock in the address bar is green on secure (HTTPS) pages and red on insecure (HTTP) ones.**
+- **Settings → About links to the project page on GitHub** (source code, release notes, downloads and bug reports).
+
+### Changed
+- The "Keep the tracker list up to date" switch is now "Keep the block lists up to date" and covers all three downloads. Turning it off also stops the browser from using the downloaded link-cleaning rules; the built-in ones still apply.
+
 ## [1.5.4] - 2026-10-05
 
 ### Fixed

@@ -58,6 +58,8 @@ cp -r ${BUILD_ROOT}/* %{buildroot}/
 /usr/share/icons/hicolor/256x256/apps/bharat-browser.png
 
 %changelog
+* Mon Oct 05 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.5-1
+- EasyList ad blocking, ClearURLs link cleaning, stronger fingerprint protection, coloured lock
 * Mon Oct 05 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.4-1
 - HTTPS upgrade, link cleaning, downloads and opened links fixed
 * Mon Oct 05 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.3-1
