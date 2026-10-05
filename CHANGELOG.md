@@ -3,6 +3,12 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.5.6] - 2026-10-06
+
+### Changed
+- **Starts about a quarter of a second faster.** Python was recompiling the whole browser (about 6,700 lines) on every launch, because the launcher ran the file directly, and Python never caches a file run that way. The launcher, the install scripts and the browser's own restart after an update now start it through an import, so the compiled code is saved and reused. For system-wide `.deb`/`.rpm` installs, which users can't write to, the package compiles the browser once at install time and removes that copy on uninstall. The faster start comes with the new launcher, so install the 1.5.6 package (or run the install script again): the in-app updater replaces only the browser itself, not the launcher.
+- **Uses about 10 MB less memory.** Every launch read all ~94,000 ad and tracker domains into memory just to work out which compiled block list to load, and the weekly "are the lists out of date?" check read them a second time, although WebKit already had the list compiled and saved. A small summary file now answers both. The full list is only read when it really has to be compiled again. Blocking is unchanged.
+
 ## [1.5.5] - 2026-10-05
 
 ### Added

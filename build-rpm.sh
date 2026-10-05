@@ -66,6 +66,8 @@ python3 -m py_compile /usr/share/bharat-browser/bharat_browser.py >/dev/null 2>&
 if [ \$1 -eq 0 ]; then rm -rf /usr/share/bharat-browser/__pycache__; fi
 
 %changelog
+* Tue Oct 06 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.6-1
+- Faster launches and about 10 MB less memory
 * Mon Oct 05 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.5-1
 - EasyList ad blocking, ClearURLs link cleaning, stronger fingerprint protection, coloured lock
 * Mon Oct 05 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.4-1
