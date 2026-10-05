@@ -146,6 +146,15 @@ def _apply_gpu_environment(environ, gpu_enabled, driver_unstable):
         environ["WEBKIT_DISABLE_COMPOSITING_MODE"] = "1"
 
 
+def _wants_accelerated_policy(gpu_enabled, fullscreen, driver_unstable):
+    """Whether the views should run with HardwareAccelerationPolicy.ALWAYS.
+
+    With the GPU off, WebKitGTK 2.52 under policy NEVER paints a fullscreen <video> as a black screen (only the
+    controls show). Pages still paint on the CPU (WEBKIT_SKIA_ENABLE_CPU_RENDERING), so the policy is lifted just
+    while something is fullscreen. Not on radeon: compositing is disabled there, and it stays black regardless."""
+    return gpu_enabled or (fullscreen and not driver_unstable)
+
+
 # GPU compositing is decided here, before WebKit2 is imported: WebKit reads these env vars once at startup, and
 # WEBKIT_FORCE_COMPOSITING_MODE overrides HardwareAccelerationPolicy.NEVER, so the Settings toggle alone could
 # never turn the GPU off. Turning it off therefore takes effect on the next launch.
@@ -1966,6 +1975,19 @@ MEDIA_POLYFILL_JS = """
         const observer = new MutationObserver(handleMutations);
         observer.observe(document.documentElement || document, { childList: true, subtree: true });
     } catch(e){}
+
+    // WebKitGTK 2.52 freezes a playing <video> when it leaves fullscreen (Esc or the exit button): the
+    // picture and currentTime stop while it still reports playing. A pause()/play() restarts it; a seek does not.
+    document.addEventListener('fullscreenchange', function() {
+        if (document.fullscreenElement) return;
+        setTimeout(function() {
+            try {
+                document.querySelectorAll('video').forEach(function(v) {
+                    if (!v.paused && !v.ended) { v.pause(); v.play().catch(function(){}); }
+                });
+            } catch(e){}
+        }, 0);
+    }, true);
 })();
 """
 
@@ -2333,10 +2355,8 @@ class BharatBrowserWindow(Gtk.Window):
         # all on this WebKit version). When off, everything falls back to
         # CPU/software rendering — useful on systems with broken/blacklisted
         # GPU drivers, at the cost of higher RAM/CPU use.
-        self.web_settings.set_hardware_acceleration_policy(
-            WebKit2.HardwareAccelerationPolicy.ALWAYS if self.gpu_acceleration_enabled
-            else WebKit2.HardwareAccelerationPolicy.NEVER
-        )
+        self._fullscreen = False
+        self._apply_hardware_acceleration_policy()
         # WebGL stays on even with the GPU off: on WebKitGTK 2.52 any window.open() popup from a view whose
         # settings disable WebGL segfaults the UI process in WebPageProxy::createNewPage.
         self.web_settings.set_enable_webgl(True)
@@ -3424,18 +3444,29 @@ class BharatBrowserWindow(Gtk.Window):
         if activate and active is not None and id(active) in self._suspended_session_states:
             self._reactivate_tab(active)
 
+    def _apply_hardware_acceleration_policy(self):
+        self.web_settings.set_hardware_acceleration_policy(
+            WebKit2.HardwareAccelerationPolicy.ALWAYS
+            if _wants_accelerated_policy(self.gpu_acceleration_enabled, self._fullscreen, _DRIVER_UNSTABLE)
+            else WebKit2.HardwareAccelerationPolicy.NEVER
+        )
+
     def on_webview_enter_fullscreen(self, webview):
         # Returning False lets WebKit's default handler fullscreen the toplevel
         # window; we only need to hide our own chrome so the video fills it.
         self.top_bar.hide()
         self.notebook.set_show_tabs(False)
         self.statusbar.hide()
+        self._fullscreen = True
+        self._apply_hardware_acceleration_policy()
         return False
 
     def on_webview_leave_fullscreen(self, webview):
         self.top_bar.show()
         self._update_tabs_visibility(self.notebook)
         self.statusbar.show()
+        self._fullscreen = False
+        self._apply_hardware_acceleration_policy()
         return False
 
     def print_active_page(self):
@@ -5747,10 +5778,7 @@ class BharatBrowserWindow(Gtk.Window):
 
     def on_gpu_acceleration_toggled(self, active):
         self.gpu_acceleration_enabled = active
-        self.web_settings.set_hardware_acceleration_policy(
-            WebKit2.HardwareAccelerationPolicy.ALWAYS if active
-            else WebKit2.HardwareAccelerationPolicy.NEVER
-        )
+        self._apply_hardware_acceleration_policy()
         if hasattr(self.web_settings, 'set_enable_2d_canvas_acceleration'):
             self.web_settings.set_enable_2d_canvas_acceleration(active)
         self.save_settings()

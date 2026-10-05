@@ -592,6 +592,13 @@ class GpuDriverTests(TmpDirCase):
         self.assertEqual(env["WEBKIT_DISABLE_COMPOSITING_MODE"], "1")
         self.assertEqual(env["WEBKIT_SKIA_ENABLE_CPU_RENDERING"], "1")
 
+    def test_gpu_off_lifts_acceleration_policy_only_while_fullscreen(self):
+        # Policy NEVER turns fullscreen video black on WebKitGTK 2.52.
+        self.assertTrue(bb._wants_accelerated_policy(gpu_enabled=True, fullscreen=False, driver_unstable=False))
+        self.assertFalse(bb._wants_accelerated_policy(gpu_enabled=False, fullscreen=False, driver_unstable=False))
+        self.assertTrue(bb._wants_accelerated_policy(gpu_enabled=False, fullscreen=True, driver_unstable=False))
+        self.assertFalse(bb._wants_accelerated_policy(gpu_enabled=False, fullscreen=True, driver_unstable=True))
+
 
 class MemoryPressureTests(unittest.TestCase):
     def test_low_means_under_ten_percent_or_400_mb_available(self):
