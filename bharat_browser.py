@@ -4028,7 +4028,7 @@ class BharatBrowserWindow(Gtk.Window):
         safe_uri = html_module.escape(uri, quote=True)
         reload_btn = f'<a class="btn" href="{safe_uri}">Reload this page</a>'
 
-        if reason == WebKit2.WebProcessTerminationReason.EXCEEDED_MEMORY:
+        if reason == WebKit2.WebProcessTerminationReason.EXCEEDED_MEMORY_LIMIT:
             # Reloading straight away would just run out of memory again.
             self.statusbar.push(self.context_id, "⚠️ This tab ran out of memory")
             page = build_notice_page(

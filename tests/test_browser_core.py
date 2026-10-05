@@ -613,5 +613,30 @@ class MemoryPressureTests(unittest.TestCase):
         self.assertTrue(0 < available <= total)
 
 
+class WebProcessCrashTests(unittest.TestCase):
+    """on_web_process_terminated named a reason WebKit doesn't have (EXCEEDED_MEMORY), so every crash raised
+    AttributeError: crashed tabs were never reloaded and no notice page appeared."""
+
+    def terminate(self, reason):
+        from types import SimpleNamespace
+        from unittest import mock
+        browser = SimpleNamespace(_crash_counts={}, homepage="about:blank", context_id=0,
+                                  statusbar=mock.Mock(), MAX_AUTO_RELOAD_CRASHES=3)
+        webview = mock.Mock()
+        webview.get_uri.return_value = "https://example.com/"
+        with mock.patch.object(bb.GLib, "idle_add", lambda fn: fn()):
+            bb.BharatBrowserWindow.on_web_process_terminated(browser, webview, reason)
+        return webview
+
+    def test_crashed_tab_reloads(self):
+        webview = self.terminate(bb.WebKit2.WebProcessTerminationReason.CRASHED)
+        webview.load_uri.assert_called_once_with("https://example.com/")
+
+    def test_out_of_memory_tab_shows_notice(self):
+        webview = self.terminate(bb.WebKit2.WebProcessTerminationReason.EXCEEDED_MEMORY_LIMIT)
+        webview.load_uri.assert_not_called()
+        self.assertIn("ran out of memory", webview.load_html.call_args[0][0])
+
+
 if __name__ == "__main__":
     unittest.main()
