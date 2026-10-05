@@ -370,6 +370,26 @@ class WindowFeatureTests(unittest.TestCase):
           var x=c.getContext('2d');x.fillStyle='#ff0000';x.fillRect(0,0,20,20);c.toDataURL();
           x.globalCompositeOperation='copy';var d=x.getImageData(0,0,2,2).data;return d[0]+','+d[1];})()"""), "255,0")
 
+    def test_farbling_exemptions_match_whole_domains(self):
+        wv = self.load("/blank")
+        cases = {
+            ("challenges.cloudflare.com", "/cdn-cgi/challenge-platform/h/b/turnstile/if/ov2/av0/rcv0/0/x"): True,
+            ("www.google.com", "/recaptcha/api2/anchor"): True,
+            ("www.google.com", "/recaptcha/enterprise/anchor"): True,
+            ("www.recaptcha.net", "/recaptcha/api2/bframe"): True,
+            ("newassets.hcaptcha.com", "/captcha/v1/abc/static/hcaptcha.html"): True,
+            ("client-api.arkoselabs.com", "/fc/gc/"): True,
+            ("WWW.YouTube.com", "/watch"): True,
+            ("www.google.com", "/search"): False,      # the rest of Google stays farbled
+            ("cloudflare.com", "/"): False,
+            ("notyoutube.com", "/"): False,            # look-alike names don't get the exemption
+            ("hcaptcha.com.evil.example", "/"): False,
+            ("example.com", "/recaptcha/"): False,
+        }
+        got = json.loads(js(wv, "JSON.stringify(%s.map(([h, p]) => %s(h, p)))"
+                            % (json.dumps([list(k) for k in cases]), bb.FARBLING_EXEMPT_JS)))
+        self.assertEqual(dict(zip(cases, got)), cases)
+
     def test_per_site_ad_blocking(self):
         self.load("/third")
         spin(lambda: False, 1.0)

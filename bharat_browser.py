@@ -1642,13 +1642,32 @@ def _detect_gpu_info_uncached():
 # site all session (so a page sees consistent values) but differs between sites and
 # sessions, so the result can't be used to recognise this computer. Very small reads
 # (colour pickers, WebGL object picking) are left exact.
+#
+# Frames that are left alone: streaming sites, and human-verification (captcha) frames, which check
+# for altered canvas/audio values and fail the visitor when they find them. Each entry is
+# (domain, path prefix); the domain matches itself and its subdomains only, so "youtube.com"
+# doesn't cover "notyoutube.com". reCAPTCHA's frame is a page on www.google.com, so it is
+# matched by path and the rest of Google stays farbled.
+FARBLING_EXEMPT = (
+    ("youtube.com", "/"),
+    ("googlevideo.com", "/"),
+    ("challenges.cloudflare.com", "/"),  # Cloudflare Turnstile and "Verify you are human"
+    ("google.com", "/recaptcha/"),
+    ("recaptcha.net", "/recaptcha/"),
+    ("hcaptcha.com", "/"),
+    ("arkoselabs.com", "/"),  # Arkose / FunCaptcha (Microsoft, GitHub and Roblox sign-ups)
+)
+FARBLING_EXEMPT_JS = r"""(function(host, path) {
+    host = host.toLowerCase();
+    return __BHARAT_FARBLE_EXEMPT__.some(([domain, prefix]) =>
+        (host === domain || host.endsWith('.' + domain)) && path.startsWith(prefix));
+})""".replace("__BHARAT_FARBLE_EXEMPT__", json.dumps([list(e) for e in FARBLING_EXEMPT]))
 FARBLING_JS = r"""
 (function() {
     if (window.__bharat_farbling__) return;
     window.__bharat_farbling__ = true;
     const host = window.location.hostname;
-    // Streaming sites, and Cloudflare's human-verification frame (it checks for altered browser values).
-    if (host.includes('youtube.com') || host.includes('googlevideo.com') || host === 'challenges.cloudflare.com') return;
+    if (__BHARAT_FARBLE_EXEMPT_JS__(host, window.location.pathname)) return;
 
     let siteSeed = 2166136261 ^ __BHARAT_FARBLE_SEED__;
     for (let i = 0; i < host.length; i++) siteSeed = Math.imul(siteSeed ^ host.charCodeAt(i), 16777619);
@@ -1782,7 +1801,7 @@ FARBLING_JS = r"""
         Object.defineProperty(navigator, 'doNotTrack', { get: () => "1" });
     } catch(e){}
 })();
-"""
+""".replace("__BHARAT_FARBLE_EXEMPT_JS__", FARBLING_EXEMPT_JS)
 # One seed per browser run, so the changes above differ every session. A private window gets its own,
 # so a site can't match a private visit to a normal one by its canvas or audio values.
 SESSION_FARBLE_SEED = secrets_module.randbits(32)

@@ -130,8 +130,11 @@ class UrlHelperTests(unittest.TestCase):
         self.assertFalse(bb._should_disable_at_bridge({"NO_AT_BRIDGE": "0"}, False), "an explicit choice is kept")
         self.assertIsInstance(bb._screen_reader_running(), bool)
 
-    def test_fingerprint_script_skips_cloudflare_challenge_frame(self):
-        self.assertIn("challenges.cloudflare.com", bb.FARBLING_JS)
+    def test_fingerprint_script_skips_captcha_frames(self):
+        self.assertIn(bb.FARBLING_EXEMPT_JS, bb.FARBLING_JS)
+        self.assertNotIn("__BHARAT_FARBLE_EXEMPT", bb.FARBLING_JS)
+        for domain in ("challenges.cloudflare.com", "recaptcha.net", "hcaptcha.com"):
+            self.assertIn(domain, bb.FARBLING_EXEMPT_JS)
 
     def test_fingerprint_script_gets_its_seed(self):
         script = bb.farbling_js(2 ** 32 + 7)
