@@ -332,6 +332,23 @@ class SecretServiceTests(unittest.TestCase):
         self.assertEqual(client.find(host), [])
 
 
+class GpuDriverTests(TmpDirCase):
+    def add_card(self, card, driver):
+        os.makedirs(os.path.join(self.tmp, "drivers", driver), exist_ok=True)
+        os.makedirs(os.path.join(self.tmp, "drm", card, "device"))
+        os.symlink(os.path.join(self.tmp, "drivers", driver), os.path.join(self.tmp, "drm", card, "device", "driver"))
+
+    def test_legacy_radeon_driver_is_unstable(self):
+        self.add_card("card0", "radeon")
+        self.assertTrue(bb._gpu_driver_is_unstable(os.path.join(self.tmp, "drm")))
+
+    def test_other_drivers_are_fine(self):
+        self.add_card("card0", "amdgpu")
+        self.add_card("card1", "i915")
+        self.assertFalse(bb._gpu_driver_is_unstable(os.path.join(self.tmp, "drm")))
+        self.assertFalse(bb._gpu_driver_is_unstable(os.path.join(self.tmp, "missing")))
+
+
 class MemoryPressureTests(unittest.TestCase):
     def test_low_means_under_ten_percent_or_400_mb_available(self):
         self.assertTrue(bb.is_memory_low(600, 8000), "under 10% of 8 GB")

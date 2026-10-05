@@ -68,6 +68,28 @@ def _read_low_memory_mode_setting():
         return False
 
 
+def _gpu_driver_is_unstable(drm_root="/sys/class/drm"):
+    """True when the legacy `radeon` kernel driver runs the GPU. On old AMD APUs (e.g. Radeon R2/R3 'Mullins')
+    WebKit's GPU compositing hits 'ring N stalled ... GPU lockup' in radeon, the reset fails and the whole
+    desktop freezes until a hard power-off. Such machines default to software rendering."""
+    try:
+        for card in os.listdir(drm_root):
+            driver = os.path.join(drm_root, card, "device", "driver")
+            if os.path.islink(driver) and os.path.basename(os.readlink(driver)) == "radeon":
+                return True
+    except OSError:
+        pass
+    return False
+
+
+def _read_gpu_acceleration_setting(default):
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            return bool(json.load(f).get("gpu_acceleration_enabled", default))
+    except Exception:
+        return default
+
+
 def _screen_reader_running():
     """True if a screen reader (Orca) is running for this desktop session."""
     try:
@@ -97,8 +119,15 @@ def _should_disable_at_bridge(environ, screen_reader_running):
 if _should_disable_at_bridge(os.environ, _screen_reader_running()):
     os.environ["NO_AT_BRIDGE"] = "1"
 
-# Enable GPU Hardware Acceleration & System-Level Acceleration Flags
-os.environ["WEBKIT_FORCE_COMPOSITING_MODE"] = "1"
+# GPU compositing is decided here, before WebKit2 is imported: WebKit reads these env vars once at startup, and
+# WEBKIT_FORCE_COMPOSITING_MODE overrides HardwareAccelerationPolicy.NEVER, so the Settings toggle alone could
+# never turn the GPU off. Turning it off therefore takes effect on the next launch.
+GPU_ACCELERATION_DEFAULT = not _gpu_driver_is_unstable()
+if _read_gpu_acceleration_setting(GPU_ACCELERATION_DEFAULT):
+    os.environ["WEBKIT_FORCE_COMPOSITING_MODE"] = "1"
+else:
+    os.environ.pop("WEBKIT_FORCE_COMPOSITING_MODE", None)
+    os.environ["WEBKIT_DISABLE_COMPOSITING_MODE"] = "1"
 os.environ["GST_VAAPI_ALL_DRIVERS"] = "1"
 os.environ["GST_DEBUG"] = "0"
 os.environ["WEBKIT_USE_SINGLE_WEB_PROCESS"] = "1" if _read_low_memory_mode_setting() else "0"
@@ -1787,7 +1816,7 @@ class BharatBrowserWindow(Gtk.Window):
         self.low_memory_mode = saved_settings.get("low_memory_mode", False)
         self.tab_suspension_enabled = saved_settings.get("tab_suspension_enabled", True)
         self.clear_history_on_exit = saved_settings.get("clear_history_on_exit", False)
-        self.gpu_acceleration_enabled = saved_settings.get("gpu_acceleration_enabled", True)
+        self.gpu_acceleration_enabled = saved_settings.get("gpu_acceleration_enabled", GPU_ACCELERATION_DEFAULT)
         self.spellcheck_enabled = saved_settings.get("spellcheck_enabled", True)
         self.tracker_lists_enabled = saved_settings.get("tracker_lists_enabled", True)
         self.passwords_enabled = saved_settings.get("passwords_enabled", True)
@@ -5134,8 +5163,8 @@ class BharatBrowserWindow(Gtk.Window):
         self._settings_section(
             adv, "GRAPHICS",
             switch("gpu_acceleration_enabled", "🎮", "Use hardware acceleration",
-                   "Draws pages, canvas and WebGL on the GPU. Turn off only if pages look broken; "
-                   "software drawing uses more CPU and RAM.",
+                   "Draws pages, canvas and WebGL on the GPU. Turn off if pages look broken or the computer "
+                   "freezes; software drawing uses more CPU and RAM. Takes full effect after a restart.",
                    self.on_gpu_acceleration_toggled),
             self._settings_row("🖥️", "Detected graphics", self.gpu_info_label),
         )
@@ -5268,6 +5297,7 @@ class BharatBrowserWindow(Gtk.Window):
         self.statusbar.push(
             self.context_id,
             "🎮 GPU Acceleration " + ("enabled" if active else "disabled — using software rendering")
+            + " (restart the browser for it to take full effect)"
         )
 
     # ------------------------------------------------------------------
