@@ -3,6 +3,11 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.5.9] - 2026-10-06
+
+### Fixed
+- **A crashed tab stayed broken.** When a tab's page crashed, Bharat Browser is meant to reload it automatically, or show a "This tab ran out of memory" or "This page keeps crashing" page. Since version 1.4.0 the crash handler itself failed on a misspelt WebKit name, so none of that happened and the tab just stayed blank until you reloaded it yourself. Crashed tabs reload again, and the two notice pages appear when they should.
+
 ## [1.5.8] - 2026-10-06
 
 ### Fixed
