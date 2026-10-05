@@ -348,6 +348,24 @@ class GpuDriverTests(TmpDirCase):
         self.assertFalse(bb._gpu_driver_is_unstable(os.path.join(self.tmp, "drm")))
         self.assertFalse(bb._gpu_driver_is_unstable(os.path.join(self.tmp, "missing")))
 
+    def test_gpu_on_forces_compositing(self):
+        env = {"WEBKIT_SKIA_ENABLE_CPU_RENDERING": "1"}
+        bb._apply_gpu_environment(env, gpu_enabled=True, driver_unstable=False)
+        self.assertEqual(env["WEBKIT_FORCE_COMPOSITING_MODE"], "1")
+        self.assertNotIn("WEBKIT_DISABLE_COMPOSITING_MODE", env)
+
+    def test_gpu_off_keeps_compositing_available(self):
+        # Disabling compositing leaves WebKit without a backing store and crashes the UI process.
+        env = {"WEBKIT_FORCE_COMPOSITING_MODE": "1"}
+        bb._apply_gpu_environment(env, gpu_enabled=False, driver_unstable=False)
+        self.assertEqual(env, {"WEBKIT_SKIA_ENABLE_CPU_RENDERING": "1"})
+
+    def test_gpu_off_on_radeon_still_disables_compositing(self):
+        env = {}
+        bb._apply_gpu_environment(env, gpu_enabled=False, driver_unstable=True)
+        self.assertEqual(env["WEBKIT_DISABLE_COMPOSITING_MODE"], "1")
+        self.assertEqual(env["WEBKIT_SKIA_ENABLE_CPU_RENDERING"], "1")
+
 
 class MemoryPressureTests(unittest.TestCase):
     def test_low_means_under_ten_percent_or_400_mb_available(self):

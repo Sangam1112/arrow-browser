@@ -119,15 +119,28 @@ def _should_disable_at_bridge(environ, screen_reader_running):
 if _should_disable_at_bridge(os.environ, _screen_reader_running()):
     os.environ["NO_AT_BRIDGE"] = "1"
 
+def _apply_gpu_environment(environ, gpu_enabled, driver_unstable):
+    """Set WebKit's rendering env vars for the GPU setting.
+
+    GPU off paints pages on the CPU (WEBKIT_SKIA_ENABLE_CPU_RENDERING) but leaves compositing available.
+    WEBKIT_DISABLE_COMPOSITING_MODE makes WebKitGTK 2.52 skip creating the view's AcceleratedBackingStore, and a
+    renderer that still enters compositing mode then segfaults the UI process (AcceleratedBackingStore::update on
+    null). It is only kept on the radeon driver, where a GPU lockup freezes the whole desktop, which is worse."""
+    if gpu_enabled:
+        environ["WEBKIT_FORCE_COMPOSITING_MODE"] = "1"
+        return
+    environ.pop("WEBKIT_FORCE_COMPOSITING_MODE", None)
+    environ["WEBKIT_SKIA_ENABLE_CPU_RENDERING"] = "1"
+    if driver_unstable:
+        environ["WEBKIT_DISABLE_COMPOSITING_MODE"] = "1"
+
+
 # GPU compositing is decided here, before WebKit2 is imported: WebKit reads these env vars once at startup, and
 # WEBKIT_FORCE_COMPOSITING_MODE overrides HardwareAccelerationPolicy.NEVER, so the Settings toggle alone could
 # never turn the GPU off. Turning it off therefore takes effect on the next launch.
-GPU_ACCELERATION_DEFAULT = not _gpu_driver_is_unstable()
-if _read_gpu_acceleration_setting(GPU_ACCELERATION_DEFAULT):
-    os.environ["WEBKIT_FORCE_COMPOSITING_MODE"] = "1"
-else:
-    os.environ.pop("WEBKIT_FORCE_COMPOSITING_MODE", None)
-    os.environ["WEBKIT_DISABLE_COMPOSITING_MODE"] = "1"
+_DRIVER_UNSTABLE = _gpu_driver_is_unstable()
+GPU_ACCELERATION_DEFAULT = not _DRIVER_UNSTABLE
+_apply_gpu_environment(os.environ, _read_gpu_acceleration_setting(GPU_ACCELERATION_DEFAULT), _DRIVER_UNSTABLE)
 os.environ["GST_VAAPI_ALL_DRIVERS"] = "1"
 os.environ["GST_DEBUG"] = "0"
 os.environ["WEBKIT_USE_SINGLE_WEB_PROCESS"] = "1" if _read_low_memory_mode_setting() else "0"
@@ -1940,7 +1953,9 @@ class BharatBrowserWindow(Gtk.Window):
             WebKit2.HardwareAccelerationPolicy.ALWAYS if self.gpu_acceleration_enabled
             else WebKit2.HardwareAccelerationPolicy.NEVER
         )
-        self.web_settings.set_enable_webgl(self.gpu_acceleration_enabled)
+        # WebGL stays on even with the GPU off: on WebKitGTK 2.52 any window.open() popup from a view whose
+        # settings disable WebGL segfaults the UI process in WebPageProxy::createNewPage.
+        self.web_settings.set_enable_webgl(True)
         if hasattr(self.web_settings, 'set_enable_2d_canvas_acceleration'):
             self.web_settings.set_enable_2d_canvas_acceleration(self.gpu_acceleration_enabled)
         if hasattr(self.web_settings, 'set_enable_smooth_scrolling'):
@@ -5290,7 +5305,6 @@ class BharatBrowserWindow(Gtk.Window):
             WebKit2.HardwareAccelerationPolicy.ALWAYS if active
             else WebKit2.HardwareAccelerationPolicy.NEVER
         )
-        self.web_settings.set_enable_webgl(active)
         if hasattr(self.web_settings, 'set_enable_2d_canvas_acceleration'):
             self.web_settings.set_enable_2d_canvas_acceleration(active)
         self.save_settings()
