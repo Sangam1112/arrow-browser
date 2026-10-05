@@ -3,6 +3,12 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.5.7] - 2026-10-06
+
+### Fixed
+- **"I'm not a robot" checks now see real canvas and audio readings.** Fingerprint protection makes tiny changes to canvas and audio readings, and captcha checks look for exactly that kind of change. Only Cloudflare's check was left alone, so Google reCAPTCHA, hCaptcha and Arkose (used at Microsoft, GitHub and Roblox sign-up) could see the changes and count them against you. These checks now get the real readings. For reCAPTCHA only the check itself, under `google.com/recaptcha/`, is left alone; Google Search and the rest of Google stay protected.
+- **Look-alike sites could switch off fingerprint protection.** Streaming sites are left alone, but the check matched any address *containing* "youtube.com", so a site named, say, `notyoutube.com` received your real canvas and audio readings. Only the real domains and their subdomains match now.
+
 ## [1.5.6] - 2026-10-06
 
 ### Changed
