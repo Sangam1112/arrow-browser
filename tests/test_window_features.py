@@ -344,6 +344,32 @@ class WindowFeatureTests(unittest.TestCase):
         wv = self.load("/js", wait_title="js-ran")
         self.assertEqual(wv.get_title(), "js-ran", "and back on again")
 
+    def test_canvas_and_audio_reads_are_farbled_consistently(self):
+        wv = self.load("/blank")
+        result = js(wv, """(function(){
+          function draw(){ var c=document.createElement('canvas'); c.width=200; c.height=50;
+            var x=c.getContext('2d'); x.fillStyle='#336699'; x.fillRect(0,0,200,50); return c; }
+          var a=draw(), b=draw(), d=a.getContext('2d').getImageData(0,0,200,50).data, changed=0;
+          for (var i=0;i<d.length;i+=4) if (d[i]!==0x33||d[i+1]!==0x66||d[i+2]!==0x99) changed++;
+          var own=a.getContext('2d'), tiny=own.getImageData(0,0,4,4).data, exact=true;
+          for (var i=0;i<tiny.length;i+=4) exact = exact && tiny[i]===0x33 && tiny[i+2]===0x99;
+          var ctx=new OfflineAudioContext(1,1000,44100), buf=ctx.createBuffer(1,1000,44100);
+          buf.copyToChannel(new Float32Array(1000).fill(0.5),0);
+          var s1=Array.from(buf.getChannelData(0)), s2=Array.from(buf.getChannelData(0));
+          return JSON.stringify({changed:changed, sameURL:a.toDataURL()===b.toDataURL(),
+            tinyExact:exact, audioChanged:s1.filter(v=>v!==0.5).length, audioStable:JSON.stringify(s1)===JSON.stringify(s2)});
+        })()""")
+        self.assertTrue(result.startswith("{"), result)
+        r = json.loads(result)
+        self.assertTrue(1 <= r["changed"] <= 64, r)
+        self.assertTrue(r["sameURL"], "the same drawing gives the same result all session")
+        self.assertTrue(r["tinyExact"], "colour-picker sized reads stay exact")
+        self.assertTrue(r["audioChanged"] > 0 and r["audioStable"], r)
+        # the page's own canvas isn't changed by toDataURL
+        self.assertEqual(js(wv, """(function(){var c=document.createElement('canvas');c.width=20;c.height=20;
+          var x=c.getContext('2d');x.fillStyle='#ff0000';x.fillRect(0,0,20,20);c.toDataURL();
+          x.globalCompositeOperation='copy';var d=x.getImageData(0,0,2,2).data;return d[0]+','+d[1];})()"""), "255,0")
+
     def test_per_site_ad_blocking(self):
         self.load("/third")
         spin(lambda: False, 1.0)
@@ -684,6 +710,39 @@ class WindowFeatureTests(unittest.TestCase):
             self.assertEqual(self.win.dark_mode_active, dark.get_active())
             dark.set_active(not dark.get_active())
             self.assertEqual(self.win.dark_mode_active, dark.get_active())
+        finally:
+            dialog.destroy()
+
+    def test_lock_colour_follows_the_connection(self):
+        win, style = self.win, self.win.url_entry.get_style_context()
+        for uri, secure, insecure in (("https://x.example/", True, False), ("http://x.example/", False, True),
+                                      ("about:blank", False, False)):
+            win.update_security_icon(uri)
+            self.assertEqual((style.has_class("url-secure"), style.has_class("url-insecure")), (secure, insecure), uri)
+
+    def test_about_page_links_to_the_project_page(self):
+        dialog = self.win.build_settings_dialog("about")
+        try:
+            def find(widget):
+                if isinstance(widget, Gtk.Label) and widget.get_text() == "Project page on GitHub":
+                    return widget
+                for child in (widget.get_children() if isinstance(widget, Gtk.Container) else ()):
+                    found = find(child)
+                    if found:
+                        return found
+            row = find(dialog).get_parent()
+            while not hasattr(row, "_bharat_button"):
+                row = row.get_parent()
+            pages = self.win.notebook.get_n_pages()
+            opened = []
+            self.win.create_new_tab = lambda url=None, **kw: opened.append(url)
+            try:
+                row._bharat_button.clicked()
+                spin(lambda: opened, 2)
+            finally:
+                del self.win.create_new_tab
+            self.assertEqual(opened, ["https://github.com/Sangam1112/bharat-browser"])
+            self.assertEqual(self.win.notebook.get_n_pages(), pages)
         finally:
             dialog.destroy()
 

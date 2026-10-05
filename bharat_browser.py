@@ -213,9 +213,11 @@ BLOCKED_PATH_SEGMENTS = (
     ('analytics.js', False), ('gtm.js', False), ('collect?', False), ('log_event', False),
 )
 
+# Built-in tracking parameters, removed even without the downloaded link-cleaning rules (any utm_* too).
 TRACKING_PARAMS = {
-    'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
-    'fbclid', 'gclid', 'msclkid', 'mc_eid', 'yclid', '_openstat', 'igshid'
+    'fbclid', 'gclid', 'gbraid', 'wbraid', 'dclid', 'gclsrc', 'msclkid', 'twclid', 'ttclid', 'yclid', 'igshid',
+    'li_fat_id', 'mc_eid', 'mc_cid', '_hsenc', '_hsmi', '__hsfp', '__hssc', '__hstc', 'mkt_tok', '_openstat',
+    'srsltid', 'oly_anon_id', 'oly_enc_id', 'rb_clickid', 's_cid', 'vero_id', 'vero_conv', 'wickedid',
 }
 
 STREAMING_EXEMPT_DOMAINS = {
@@ -295,37 +297,75 @@ def build_content_blocker_rules_json(extra_domains=()):
                       "action": {"type": "block"}})
     return json.dumps(rules).encode("utf-8")
 
-def sanitize_url(url_str):
-    if '?' not in url_str:
-        return url_str
+def _is_builtin_tracking_param(key):
+    key = urllib.parse.unquote_plus(key).lower()
+    return key in TRACKING_PARAMS or key.startswith("utm_")
+
+
+def _drop_query_params(url, is_tracking):
+    """`url` without the query parameters whose (still encoded) name is_tracking(). Everything else, including
+    the encoding of the parameters that stay and the #fragment, is left exactly as it was."""
+    url, hash_sep, fragment = url.partition("#")  # a "?" after the "#" (e.g. Gmail's #inbox?x) isn't the query
+    base, sep, query = url.partition("?")
+    if not sep:
+        return url + hash_sep + fragment
+    segments = query.split("&")
+    kept = [seg for seg in segments if not (seg and is_tracking(seg.split("=", 1)[0]))]
+    if len(kept) == len(segments):
+        return url
+    query = "&".join(seg for seg in kept if seg)
+    return base + ("?" + query if query else "") + hash_sep + fragment
+
+
+def _apply_url_rules(url, rules, depth=0):
+    """Clean `url` with compiled link-cleaning rules (see compile_url_rules), in the add-on's order: a
+    tracking redirect is replaced by its real destination (which is cleaned in turn), then raw rules are cut
+    out and tracking parameters dropped."""
+    for site in rules:
+        if not site.url_re.search(url):
+            continue
+        exceptions, params_re, raw_res, redirects = site.compiled()
+        if any(e.search(url) for e in exceptions):
+            continue
+        if depth < 2:
+            for redirect in redirects:
+                m = redirect.search(url)
+                target = urllib.parse.unquote(m.group(1) or "") if m and m.re.groups else ""
+                if target.startswith(("http://", "https://")):
+                    return _apply_url_rules(target, rules, depth + 1)
+        for raw in raw_res:
+            url = raw.sub("", url)
+        if params_re is not None:
+            url = _drop_query_params(url, params_re.fullmatch)
+    return url
+
+
+def sanitize_url(url_str, rules=()):
+    """`url_str` without tracking parameters: the built-in ones always, plus whatever the downloaded
+    link-cleaning `rules` (load_url_rules_cache) remove, including skipping tracking redirects."""
     try:
-        parsed = urllib.parse.urlparse(url_str)
-        if not parsed.query:
-            return url_str
-        query_pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
-        filtered_pairs = [(k, v) for k, v in query_pairs if k.lower() not in TRACKING_PARAMS]
-        if len(filtered_pairs) == len(query_pairs):
-            return url_str
-        new_query = urllib.parse.urlencode(filtered_pairs)
-        return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment))
+        if rules:
+            url_str = _apply_url_rules(url_str, rules)
+        return _drop_query_params(url_str, _is_builtin_tracking_param)
     except Exception:
         return url_str
 
 
-def secure_and_clean_url(uri, upgrade_https=True, strip_tracking=True, http_allowed_hosts=()):
+def secure_and_clean_url(uri, upgrade_https=True, strip_tracking=True, http_allowed_hosts=(), url_rules=()):
     """The address to actually load: http:// upgraded to https:// (except local-network hosts and hosts the
     user chose to visit over HTTP) and tracking parameters removed. Returns (uri, upgraded, stripped).
-    Applied before a load starts: WebKitGTK ignores a request rewritten from resource-load-started."""
+    Applied before a load starts: WebKitGTK ignores a request rewritten from resource-load-started.
+    Cleaning comes first because skipping a tracking redirect can change the host that gets upgraded."""
     upgraded = stripped = False
+    if strip_tracking:
+        cleaned = sanitize_url(uri, url_rules)
+        stripped = cleaned != uri
+        uri = cleaned
     if upgrade_https and uri.startswith("http://"):
         host = site_host_of(uri)
         if host and not is_local_network_host(host) and host not in http_allowed_hosts:
             uri = "https://" + uri[len("http://"):]
             upgraded = True
-    if strip_tracking:
-        cleaned = sanitize_url(uri)
-        stripped = cleaned != uri
-        uri = cleaned
     return uri, upgraded, stripped
 
 
@@ -452,6 +492,8 @@ def ed25519_verify(public_key, message, signature):
             and (lhs[1] * rhs[2] - rhs[1] * lhs[2]) % _ED_P == 0)
 # ed25519 verify end
 
+
+PROJECT_PAGE_URL = "https://github.com/Sangam1112/bharat-browser"
 
 # Where the updater learns the latest version. GitHub's API is asked first: raw.githubusercontent.com
 # caches the branch address for several minutes, so right after a release it can still report the old
@@ -1007,13 +1049,17 @@ def get_site_permission(settings, host, kind):
 
 
 # ---------------------------------------------------------------------------
-# Tracker list updates (EasyPrivacy domain rules -> WebKit content blocker)
+# Block list updates (EasyPrivacy + EasyList domain rules -> WebKit content blocker)
 # ---------------------------------------------------------------------------
-TRACKER_LIST_URL = "https://easylist.to/easylist/easyprivacy.txt"
+# In priority order: if the lists ever outgrow TRACKER_LIST_MAX_DOMAINS, the later ones are cut short.
+TRACKER_LIST_URLS = ("https://easylist.to/easylist/easyprivacy.txt",  # trackers
+                     "https://easylist.to/easylist/easylist.txt")     # ads
 TRACKER_LIST_CACHE = os.path.join(CACHE_DIR, "tracker_list.json")
 TRACKER_LIST_MAX_AGE = 7 * 24 * 3600
 TRACKER_LIST_MAX_BYTES = 8 * 1024 * 1024
-TRACKER_LIST_MAX_DOMAINS = 50000
+# One content-blocker rule per domain. Both lists together are ~94,000 domains (~19 s to compile, once a
+# week, in the background); WebKit refuses a rule list of more than 150,000 rules.
+TRACKER_LIST_MAX_DOMAINS = 120000
 # Never block these even if a list says so: blocking them breaks sign-in, captchas
 # and a huge number of sites, which is a worse outcome than a missed tracker.
 _NEVER_BLOCK_SUBTREES = {
@@ -1061,20 +1107,151 @@ def load_tracker_list_cache():
         return set(), 0.0
 
 
-def fetch_tracker_list(url=TRACKER_LIST_URL, timeout=20):
-    """Download + parse the tracker list and cache the result. Raises on failure."""
-    req = urllib.request.Request(url, headers={"User-Agent": "BharatBrowser-tracker-list"})
+def tracker_list_is_stale(now=None):
+    """True when the block lists should be downloaded again: older than a week, or fetched from a different
+    set of lists (e.g. EasyPrivacy only, before EasyList was added)."""
+    try:
+        with open(TRACKER_LIST_CACHE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # Caches from before 1.5.5 have no "sources": they hold EasyPrivacy alone.
+        sources = data.get("sources", [TRACKER_LIST_URLS[0]])
+        fetched = float(data.get("fetched", 0))
+    except Exception:
+        return True
+    return sources != list(TRACKER_LIST_URLS) or (now or time.time()) - fetched > TRACKER_LIST_MAX_AGE
+
+
+def _download_capped(url, max_bytes, timeout, agent):
+    req = urllib.request.Request(url, headers={"User-Agent": agent})
     with urllib.request.urlopen(req, timeout=timeout) as response:
-        raw = response.read(TRACKER_LIST_MAX_BYTES + 1)
-    if len(raw) > TRACKER_LIST_MAX_BYTES:
-        raise ValueError("tracker list too large")
-    domains = parse_abp_domain_rules(raw.decode("utf-8", errors="replace"))
-    if len(domains) < 100:
-        raise ValueError(f"tracker list looks wrong ({len(domains)} domains)")
-    domains = set(sorted(domains)[:TRACKER_LIST_MAX_DOMAINS])
+        raw = response.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise ValueError(f"{url} is too large")
+    return raw
+
+
+def _drop_covered_subdomains(domains):
+    """Each rule also blocks subdomains, so a.tracker.com is redundant when tracker.com is listed."""
+    return {d for d in domains if not _host_matches_domain_set(d.split(".", 1)[1], domains)}
+
+
+def fetch_tracker_list(urls=TRACKER_LIST_URLS, timeout=20):
+    """Download + parse the block lists and cache the merged result. Raises if any list fails, so a
+    half-finished update never replaces a complete older one."""
+    domains = set()
+    for url in urls:
+        listed = parse_abp_domain_rules(
+            _download_capped(url, TRACKER_LIST_MAX_BYTES, timeout, "BharatBrowser-tracker-list")
+            .decode("utf-8", errors="replace"))
+        if len(listed) < 100:
+            raise ValueError(f"{url.rsplit('/', 1)[-1]} looks wrong ({len(listed)} domains)")
+        listed = sorted(d for d in _drop_covered_subdomains(listed) if not _host_matches_domain_set(d, domains))
+        domains.update(listed[:max(0, TRACKER_LIST_MAX_DOMAINS - len(domains))])
     os.makedirs(CACHE_DIR, exist_ok=True)
-    _write_json_private(TRACKER_LIST_CACHE, {"fetched": time.time(), "domains": sorted(domains)}, indent=None)
+    _write_json_private(TRACKER_LIST_CACHE, {"fetched": time.time(), "sources": list(urls),
+                                             "domains": sorted(domains)}, indent=None)
     return domains
+
+
+# ---------------------------------------------------------------------------
+# Link-cleaning rules: the ClearURLs rule set, downloaded with the block lists (not bundled)
+# ---------------------------------------------------------------------------
+URL_RULES_URLS = ("https://rules2.clearurls.xyz/data.minify.json",            # what the ClearURLs add-on uses
+                  "https://gitlab.com/ClearURLs/rules/-/raw/master/data.min.json")  # same rules, if that's down
+URL_RULES_CACHE = os.path.join(CACHE_DIR, "url_rules.json")
+URL_RULES_MAX_BYTES = 2 * 1024 * 1024
+_url_rules_memo = {}
+_url_rules_lock = threading.Lock()
+
+
+def _compile_rule(pattern):
+    try:
+        return re.compile(pattern, re.IGNORECASE) if isinstance(pattern, str) and pattern else None
+    except (re.error, RecursionError):
+        return None
+
+
+class UrlRuleSite:
+    """One ClearURLs provider. Python's regex compiler is slow (all ~200 sites take ~0.4 s), so only the
+    address pattern is compiled up front and the rest the first time a matching address is cleaned."""
+    __slots__ = ("url_re", "_provider", "_compiled")
+
+    def __init__(self, url_re, provider):
+        self.url_re, self._provider, self._compiled = url_re, provider, None
+
+    def _patterns(self, key):
+        values = self._provider.get(key)
+        return [r for r in map(_compile_rule, values) if r] if isinstance(values, list) else []
+
+    def compiled(self):
+        """(exception_res, params_re, raw_res, redirect_res)."""
+        if self._compiled is None:
+            params = [r.pattern for r in self._patterns("rules")]
+            self._compiled = (self._patterns("exceptions"),
+                              _compile_rule("(?:" + "|".join(params) + ")") if params else None,
+                              self._patterns("rawRules"), self._patterns("redirections"))
+        return self._compiled
+
+
+def compile_url_rules(providers):
+    """ClearURLs providers -> [UrlRuleSite], applied as the add-on does: a provider counts when its urlPattern
+    matches and none of its exceptions do; its `rules` name query parameters to drop (the whole name, any
+    case), `rawRules` are cut out of the address and `redirections` capture where a tracking redirect really
+    goes. Left out on purpose: `referralMarketing` (affiliate tags, and ?ref= also picks the branch on
+    GitHub) and `completeProvider` (blocks the whole page). A pattern Python can't compile is skipped."""
+    compiled = []
+    for _name, provider in sorted(providers.items()) if isinstance(providers, dict) else ():
+        if isinstance(provider, dict):
+            url_re = _compile_rule(provider.get("urlPattern"))
+            if url_re is not None:
+                compiled.append(UrlRuleSite(url_re, provider))
+    return compiled
+
+
+def load_url_rules_cache(block=True):
+    """(rules, fetched_epoch) from the last successful download, or ([], 0). Compiled once per download and
+    shared by every window. With block=False nothing is compiled in the calling thread: until a background
+    compile has finished this returns ([], 0), so a navigation never waits for it."""
+    try:
+        st = os.stat(URL_RULES_CACHE)
+    except OSError:
+        return [], 0.0
+    key = (st.st_mtime_ns, st.st_size)
+    if key in _url_rules_memo:
+        return _url_rules_memo[key]
+    if not block:
+        if not _url_rules_lock.locked():
+            threading.Thread(target=load_url_rules_cache, daemon=True).start()
+        return [], 0.0
+    with _url_rules_lock:
+        if key not in _url_rules_memo:
+            try:
+                with open(URL_RULES_CACHE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                result = (compile_url_rules(data.get("providers")), float(data.get("fetched", 0)))
+            except Exception:
+                result = ([], 0.0)
+            _url_rules_memo.clear()
+            _url_rules_memo[key] = result
+        return _url_rules_memo[key]
+
+
+def fetch_url_rules(urls=URL_RULES_URLS, timeout=20):
+    """Download the link-cleaning rules from the first source that works and cache them. Raises on failure."""
+    error = None
+    for url in urls:
+        try:
+            providers = json.loads(_download_capped(url, URL_RULES_MAX_BYTES, timeout,
+                                                    "BharatBrowser-url-rules").decode("utf-8"))["providers"]
+            count = len(compile_url_rules(providers))
+            if count < 50:
+                raise ValueError(f"link-cleaning rules look wrong ({count} sites)")
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            _write_json_private(URL_RULES_CACHE, {"fetched": time.time(), "providers": providers}, indent=None)
+            return count
+        except Exception as e:
+            error = e
+    raise error
 
 
 # ---------------------------------------------------------------------------
@@ -1419,8 +1596,12 @@ def _detect_gpu_info_uncached():
 
 # Anti-Fingerprinting Farbling Engine JS
 # Registered as a UserScript with START injection time so it patches
-# canvas/WebGL/navigator APIs before any page script can read the originals.
-FARBLING_JS = """
+# canvas/WebGL/audio/navigator APIs before any page script can read the originals.
+# Canvas and audio reads get a tiny, invisible/inaudible change that is the same for one
+# site all session (so a page sees consistent values) but differs between sites and
+# sessions, so the result can't be used to recognise this computer. Very small reads
+# (colour pickers, WebGL object picking) are left exact.
+FARBLING_JS = r"""
 (function() {
     if (window.__bharat_farbling__) return;
     window.__bharat_farbling__ = true;
@@ -1428,33 +1609,128 @@ FARBLING_JS = """
     // Streaming sites, and Cloudflare's human-verification frame (it checks for altered browser values).
     if (host.includes('youtube.com') || host.includes('googlevideo.com') || host === 'challenges.cloudflare.com') return;
 
+    let siteSeed = 2166136261 ^ __BHARAT_FARBLE_SEED__;
+    for (let i = 0; i < host.length; i++) siteSeed = Math.imul(siteSeed ^ host.charCodeAt(i), 16777619);
+    function noise(i) {
+        let x = (siteSeed ^ Math.imul(i + 1, 0x9E3779B1)) >>> 0;
+        x = Math.imul(x ^ (x >>> 16), 0x85EBCA6B);
+        x = Math.imul(x ^ (x >>> 13), 0xC2B2AE35);
+        return (x ^ (x >>> 16)) >>> 0;
+    }
+    const MIN_PIXELS = 64;
+    // Flip the lowest bit of one colour channel in roughly 1 pixel in 256 (at most 64). Only fully opaque
+    // pixels: in a transparent one the change would be lost when the canvas is encoded to PNG.
+    function farblePixels(data) {
+        const pixels = data.length >> 2;
+        if (pixels < MIN_PIXELS) return;
+        const wanted = Math.min(64, Math.max(1, pixels >> 8));
+        let flipped = 0;
+        for (let k = 0; k < wanted * 16 && flipped < wanted; k++) {
+            const n = noise(k), p = (n % pixels) * 4;
+            if (data[p + 3] === 255) { data[p + (n >>> 8) % 3] ^= 1; flipped++; }
+        }
+        if (flipped) return;
+        const start = noise(-1) % pixels;  // mostly transparent canvas: use the first opaque pixel instead
+        for (let k = 0; k < pixels; k++) {
+            const p = ((start + k) % pixels) * 4;
+            if (data[p + 3] === 255) { data[p] ^= 1; return; }
+        }
+    }
+
     try {
         const origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
         CanvasRenderingContext2D.prototype.getImageData = function() {
             const res = origGetImageData.apply(this, arguments);
-            if (res && res.data && res.data.length > 0) {
-                res.data[0] = res.data[0] ^ 1;
-            }
+            try { farblePixels(res.data); } catch(e){}
             return res;
         };
-    } catch(e){}
 
-    try {
-        const getParam = WebGLRenderingContext.prototype.getParameter;
-        WebGLRenderingContext.prototype.getParameter = function(param) {
-            if (param === 37445) return "Generic Open-Source GPU Engine";
-            if (param === 37446) return "Bharat Privacy WebGL Renderer";
-            return getParam.apply(this, arguments);
+        // toDataURL/toBlob encode a farbled copy; the page's own canvas is never changed.
+        // A canvas that can't be read (cross-origin image drawn in) falls through to the
+        // original, which throws the page's usual SecurityError.
+        const farbledCopy = function(canvas) {
+            try {
+                const w = canvas.width, h = canvas.height;
+                if (w * h < MIN_PIXELS || w * h > 16777216) return null;
+                const copy = document.createElement('canvas');
+                copy.width = w; copy.height = h;
+                const ctx = copy.getContext('2d');
+                ctx.drawImage(canvas, 0, 0);
+                const img = origGetImageData.call(ctx, 0, 0, w, h);
+                farblePixels(img.data);
+                ctx.putImageData(img, 0, 0);
+                return copy;
+            } catch(e) { return null; }
+        };
+        const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+        HTMLCanvasElement.prototype.toDataURL = function() {
+            return origToDataURL.apply(farbledCopy(this) || this, arguments);
+        };
+        const origToBlob = HTMLCanvasElement.prototype.toBlob;
+        HTMLCanvasElement.prototype.toBlob = function() {
+            return origToBlob.apply(farbledCopy(this) || this, arguments);
         };
     } catch(e){}
 
-    try {
-        if (window.WebGL2RenderingContext) {
-            const getParam2 = WebGL2RenderingContext.prototype.getParameter;
-            WebGL2RenderingContext.prototype.getParameter = function(param) {
+    for (const name of ['WebGLRenderingContext', 'WebGL2RenderingContext']) {
+        try {
+            const proto = window[name] && window[name].prototype;
+            if (!proto) continue;
+            const getParam = proto.getParameter;
+            proto.getParameter = function(param) {
                 if (param === 37445) return "Generic Open-Source GPU Engine";
                 if (param === 37446) return "Bharat Privacy WebGL Renderer";
-                return getParam2.apply(this, arguments);
+                return getParam.apply(this, arguments);
+            };
+            const readPixels = proto.readPixels;
+            proto.readPixels = function(x, y, w, h, format, type, pixels) {
+                const res = readPixels.apply(this, arguments);
+                try {
+                    if (pixels instanceof Uint8Array && format === this.RGBA && w * h >= MIN_PIXELS) farblePixels(pixels);
+                } catch(e){}
+                return res;
+            };
+        } catch(e){}
+    }
+
+    // Audio fingerprinting renders a sound offline and reads the samples back. Scale about
+    // 1 sample in 100 by a factor within 0.00001 of 1 (about -100 dB, far below hearing).
+    function farbleSamples(arr) {
+        if (!arr || !arr.length) return;
+        for (let i = noise(0x5eed) % 100; i < arr.length; i += 100) {
+            arr[i] *= 1 + ((noise(i) & 0xff) - 127.5) * 1e-7;
+        }
+    }
+    try {
+        // getChannelData returns the buffer's live samples, so each channel is changed only once.
+        const done = new WeakMap();
+        const getChannelData = AudioBuffer.prototype.getChannelData;
+        AudioBuffer.prototype.getChannelData = function(channel) {
+            const data = getChannelData.apply(this, arguments);
+            try {
+                let seen = done.get(this);
+                if (!seen) { seen = new Set(); done.set(this, seen); }
+                if (!seen.has(channel >>> 0)) { seen.add(channel >>> 0); farbleSamples(data); }
+            } catch(e){}
+            return data;
+        };
+        const copyFromChannel = AudioBuffer.prototype.copyFromChannel;
+        if (copyFromChannel) {
+            AudioBuffer.prototype.copyFromChannel = function(destination) {
+                const res = copyFromChannel.apply(this, arguments);
+                try { farbleSamples(destination); } catch(e){}
+                return res;
+            };
+        }
+    } catch(e){}
+    try {
+        for (const method of ['getFloatFrequencyData', 'getFloatTimeDomainData']) {
+            const orig = AnalyserNode.prototype[method];
+            if (!orig) continue;
+            AnalyserNode.prototype[method] = function(array) {
+                const res = orig.apply(this, arguments);
+                try { farbleSamples(array); } catch(e){}
+                return res;
             };
         }
     } catch(e){}
@@ -1466,6 +1742,13 @@ FARBLING_JS = """
     } catch(e){}
 })();
 """
+# One seed per browser run, so the changes above differ every session. A private window gets its own,
+# so a site can't match a private visit to a normal one by its canvas or audio values.
+SESSION_FARBLE_SEED = secrets_module.randbits(32)
+
+
+def farbling_js(seed):
+    return FARBLING_JS.replace("__BHARAT_FARBLE_SEED__", str(int(seed) & 0xFFFFFFFF))
 
 # Smart Link Prefetching UserScript JS
 PREFETCH_USER_SCRIPT = """
@@ -2163,7 +2446,7 @@ class BharatBrowserWindow(Gtk.Window):
             None, None
         )
         self.farbling_script = WebKit2.UserScript(
-            FARBLING_JS,
+            farbling_js(secrets_module.randbits(32) if self.is_private else SESSION_FARBLE_SEED),
             WebKit2.UserContentInjectedFrames.ALL_FRAMES,
             WebKit2.UserScriptInjectionTime.START,
             None, None
@@ -2329,6 +2612,8 @@ class BharatBrowserWindow(Gtk.Window):
         for url in startup_urls:
             self.create_new_tab(url)
 
+        if self.tracker_lists_enabled:
+            load_url_rules_cache(block=False)  # compile the link-cleaning rules in the background
         # Refresh the downloaded tracker list in the background if it's stale.
         if not self.is_private:
             GLib.timeout_add_seconds(20, self._maybe_refresh_tracker_list)
@@ -2402,7 +2687,7 @@ class BharatBrowserWindow(Gtk.Window):
     def _compile_content_blocker_filter(self):
         """Install the native content blocker. Compiled filters persist in WebKit's
         store, so a launch normally just loads one (instant); compiling the large
-        downloaded tracker list takes ~10s and only happens when the list changes.
+        downloaded block lists takes ~20s and only happens when the lists change.
         The small built-in rules go in first so the browser is never unprotected
         while the big list compiles."""
         try:
@@ -2461,7 +2746,7 @@ class BharatBrowserWindow(Gtk.Window):
                 if wants:
                     ucm.add_filter(content_filter)
                 wv._bharat_filter_on = wants
-        print(f"Native ad/tracker content-blocker active ({rank:,} downloaded tracker domains).")
+        print(f"Native ad/tracker content-blocker active ({rank:,} downloaded ad and tracker domains).")
         # Drop compiled filters left behind by earlier tracker-list versions.
         store.fetch_identifiers(None, self._prune_content_filters, keep)
 
@@ -2590,6 +2875,8 @@ class BharatBrowserWindow(Gtk.Window):
             caret-color: #818cf8;
         }
         entry.url-entry image { color: #6b7686; margin-right: 2px; }
+        entry.url-entry.url-secure image.left { color: #22c55e; }
+        entry.url-entry.url-insecure image.left { color: #ef4444; }
         entry.url-entry:focus {
             background-color: rgba(255, 255, 255, 0.07);
             border-color: #6366f1;
@@ -3433,12 +3720,18 @@ class BharatBrowserWindow(Gtk.Window):
             self._reactivate_tab(tab_box)
 
     def update_security_icon(self, uri):
+        """The lock in the address bar: green for HTTPS, red for plain HTTP, a grey search icon otherwise."""
+        style = self.url_entry.get_style_context()
+        style.remove_class("url-secure")
+        style.remove_class("url-insecure")
         if uri.startswith("https://"):
             self.url_entry.set_icon_from_icon_name(Gtk.EntryIconPosition.PRIMARY, "channel-secure-symbolic")
             self.url_entry.set_icon_tooltip_text(Gtk.EntryIconPosition.PRIMARY, "Secure connection (HTTPS)")
+            style.add_class("url-secure")
         elif uri.startswith("http://"):
             self.url_entry.set_icon_from_icon_name(Gtk.EntryIconPosition.PRIMARY, "channel-insecure-symbolic")
             self.url_entry.set_icon_tooltip_text(Gtk.EntryIconPosition.PRIMARY, "Not secure (HTTP)")
+            style.add_class("url-insecure")
         else:
             self.url_entry.set_icon_from_icon_name(Gtk.EntryIconPosition.PRIMARY, "edit-find-symbolic")
             self.url_entry.set_icon_tooltip_text(Gtk.EntryIconPosition.PRIMARY, "")
@@ -4342,8 +4635,9 @@ class BharatBrowserWindow(Gtk.Window):
         """The address to load for one the browser opens itself (address bar, new tab, bookmark, a link from
         another app, a popup's first page): upgraded to HTTPS and with tracking parameters removed, per the
         Settings. Counted for the Privacy Report only when something really changed."""
+        url_rules = load_url_rules_cache(block=False)[0] if self.tracker_lists_enabled else ()
         new_uri, upgraded, stripped = secure_and_clean_url(
-            uri, self.https_enabled, self.clearurls_enabled, self._http_allowed_hosts)
+            uri, self.https_enabled, self.clearurls_enabled, self._http_allowed_hosts, url_rules)
         if upgraded:
             if len(self._recent_https_upgrades) > 200:
                 self._recent_https_upgrades.clear()
@@ -5130,7 +5424,7 @@ class BharatBrowserWindow(Gtk.Window):
                         "Protection is on from the first launch. Use the 🔒 icon in the address bar "
                         "to change these for a single site.")
 
-        tracker_row = self._settings_button_row("🛰️", "Tracker list", self._tracker_status_text(),
+        tracker_row = self._settings_button_row("🛰️", "Block lists", self._tracker_status_text(),
                                                 "Update now", lambda: None)
         btn_tracker_update = tracker_row._bharat_button
 
@@ -5153,12 +5447,14 @@ class BharatBrowserWindow(Gtk.Window):
             switch("adblock_enabled", "🛡️", "Block ads and trackers",
                    "Stops known ad and tracking servers on every site. Sign-in pages and captchas keep working.",
                    store("adblock_enabled")),
-            switch("tracker_lists_enabled", "🔄", "Keep the tracker list up to date",
-                   "Downloads the EasyPrivacy list from easylist.to about once a week.",
+            switch("tracker_lists_enabled", "🔄", "Keep the block lists up to date",
+                   "About once a week, downloads EasyList (ads) and EasyPrivacy (trackers) from easylist.to and "
+                   "the ClearURLs link-cleaning rules from clearurls.xyz.",
                    self.on_tracker_lists_toggled),
             tracker_row,
             switch("clearurls_enabled", "🔗", "Remove tracking tags from links",
-                   "Strips utm_*, fbclid, gclid and similar tags from addresses before they load.",
+                   "Strips utm_*, fbclid, gclid and hundreds of site-specific tags from addresses before they "
+                   "load, and skips tracking redirects such as google.com/url?q=.",
                    store("clearurls_enabled")),
         )
 
@@ -5305,7 +5601,11 @@ class BharatBrowserWindow(Gtk.Window):
             chips.pack_start(chip, False, False, 0)
         hero_text.pack_start(chips, False, False, 0)
         hero.pack_start(hero_text, True, True, 0)
-        self._settings_section(about, "VERSION", hero)
+        project_row = self._settings_button_row(
+            "🌐", "Project page on GitHub",
+            "Source code, release notes, downloads and bug reports: " + PROJECT_PAGE_URL.split("://", 1)[1],
+            "Open", lambda: close_then(lambda: self.create_new_tab(PROJECT_PAGE_URL)))
+        self._settings_section(about, "VERSION", hero, project_row)
 
         update_row = self._settings_button_row(
             "🔄", "Check for updates",
@@ -6378,23 +6678,34 @@ td.c{{text-align:right;color:#cbd5e1;width:70px}}td.b{{width:30%}}td.b span{{dis
             return "Not downloaded yet."
         days = int((time.time() - fetched) // 86400)
         age = "today" if days <= 0 else f"{days} day{'s' if days != 1 else ''} ago"
-        return f"{len(domains):,} tracker domains • updated {age}"
+        rules = len(load_url_rules_cache(block=False)[0])
+        return f"{len(domains):,} ad and tracker domains" + (f", {rules} link-cleaning rules" if rules else "") + f" • updated {age}"
 
     def _maybe_refresh_tracker_list(self):
         if self.tracker_lists_enabled and not self.is_private:
-            _, fetched = load_tracker_list_cache()
-            if time.time() - fetched > TRACKER_LIST_MAX_AGE:
-                self.refresh_tracker_list_async()
+            lists = tracker_list_is_stale()
+            url_rules = time.time() - load_url_rules_cache()[1] > TRACKER_LIST_MAX_AGE
+            if lists or url_rules:
+                self.refresh_tracker_list_async(lists=lists, url_rules=url_rules)
         return False
 
-    def refresh_tracker_list_async(self, on_done=None):
-        """Download the tracker list in a background thread, then recompile the blocker."""
+    def refresh_tracker_list_async(self, on_done=None, lists=True, url_rules=True):
+        """Download the block lists and/or the link-cleaning rules in a background thread, then recompile the
+        blocker. A failure of one doesn't stop the other; on_done gets the error text, or None."""
         def worker():
-            try:
-                domains = fetch_tracker_list()
-                error = None
-            except Exception as e:
-                domains, error = None, str(e)
+            errors = []
+            domains = None
+            if lists:
+                try:
+                    domains = fetch_tracker_list()
+                except Exception as e:
+                    errors.append(f"block lists: {e}")
+            if url_rules:
+                try:
+                    fetch_url_rules()
+                except Exception as e:
+                    errors.append(f"link-cleaning rules: {e}")
+            error = "; ".join(errors) or None
 
             def finish():
                 if domains is not None:

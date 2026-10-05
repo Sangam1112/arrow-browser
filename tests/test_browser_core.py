@@ -48,6 +48,16 @@ class UrlHelperTests(unittest.TestCase):
                          ("http://x.com/?gclid=1", False, False), "both settings off")
         self.assertEqual(f("about:blank"), ("about:blank", False, False))
 
+    def test_sanitize_url_keeps_everything_else_exactly(self):
+        f = bb.sanitize_url
+        self.assertEqual(f("https://x.com/a?utm_id=1&utm_whatever=2&q=a%20b+c&gbraid=3#top?utm_source=x"),
+                         "https://x.com/a?q=a%20b+c#top?utm_source=x", "any utm_*, encoding and #fragment kept")
+        self.assertEqual(f("https://x.com/a?UTM_SOURCE=t&TtClid=1"), "https://x.com/a")
+        self.assertEqual(f("https://x.com/a?&flag&id=5"), "https://x.com/a?&flag&id=5", "untouched if nothing to drop")
+        self.assertEqual(f("https://x.com/a?flag&srsltid=9&id=5"), "https://x.com/a?flag&id=5")
+        self.assertEqual(f("https://mail.example/u/0/#inbox?utm_source=x"), "https://mail.example/u/0/#inbox?utm_source=x",
+                         "a ? inside the #fragment is the page's own route, not the query")
+
     def test_startup_urls_from_args(self):
         self.assertEqual(bb.startup_urls_from_args(["https://x.com/", "", "--flag", "javascript:alert(1)",
                                                     "no-such-file", __file__, "http://y.org"]),
@@ -122,6 +132,12 @@ class UrlHelperTests(unittest.TestCase):
 
     def test_fingerprint_script_skips_cloudflare_challenge_frame(self):
         self.assertIn("challenges.cloudflare.com", bb.FARBLING_JS)
+
+    def test_fingerprint_script_gets_its_seed(self):
+        script = bb.farbling_js(2 ** 32 + 7)
+        self.assertNotIn("__BHARAT_FARBLE_SEED__", script)
+        self.assertIn("2166136261 ^ 7;", script)
+        self.assertNotEqual(bb.farbling_js(1), bb.farbling_js(2))
 
     def test_site_host_of(self):
         self.assertEqual(bb.site_host_of("https://WWW.Example.com:8080/x"), "www.example.com")
@@ -279,6 +295,130 @@ class TrackerListTests(unittest.TestCase):
         self.assertEqual(bb.load_tracker_list_cache(), (set(), 0.0))
         write_json(bb.TRACKER_LIST_CACHE, {"fetched": 5, "domains": ["a.example", 7]})
         self.assertEqual(bb.load_tracker_list_cache(), ({"a.example"}, 5.0))
+
+
+class TrackerListFetchTests(TmpDirCase):
+    def setUp(self):
+        super().setUp()
+        for name in ("TRACKER_LIST_CACHE", "CACHE_DIR"):
+            self.addCleanup(setattr, bb, name, getattr(bb, name))
+        bb.CACHE_DIR = self.tmp
+        bb.TRACKER_LIST_CACHE = os.path.join(self.tmp, "t.json")
+
+    def list_url(self, name, domains):
+        path = os.path.join(self.tmp, name)
+        write_text(path, "\n".join(f"||{d}^" for d in domains))
+        return "file://" + path
+
+    def test_lists_are_merged_in_priority_order(self):
+        trackers = self.list_url("easyprivacy.txt", [f"t{i}.example" for i in range(150)] + ["shared.example"])
+        ads = self.list_url("easylist.txt", [f"a{i}.example" for i in range(150)]
+                            + ["shared.example", "sub.shared.example", "x.ad.example", "ad.example"])
+        old_max = bb.TRACKER_LIST_MAX_DOMAINS
+        self.addCleanup(setattr, bb, "TRACKER_LIST_MAX_DOMAINS", old_max)
+        bb.TRACKER_LIST_MAX_DOMAINS = 200
+        domains = bb.fetch_tracker_list((trackers, ads))
+        self.assertEqual(len(domains), 200, "capped")
+        self.assertTrue({f"t{i}.example" for i in range(150)} <= domains, "the first list is kept whole")
+        self.assertNotIn("sub.shared.example", domains, "covered by shared.example")
+        bb.TRACKER_LIST_MAX_DOMAINS = old_max
+        domains = bb.fetch_tracker_list((trackers, ads))
+        self.assertIn("ad.example", domains)
+        self.assertNotIn("x.ad.example", domains, "covered by ad.example")
+        with open(bb.TRACKER_LIST_CACHE) as f:
+            self.assertEqual(json.load(f)["sources"], [trackers, ads])
+        self.assertEqual(bb.load_tracker_list_cache()[0], domains)
+
+    def test_one_bad_list_keeps_the_old_cache(self):
+        write_json(bb.TRACKER_LIST_CACHE, {"fetched": 5, "domains": ["old.example"]})
+        good = self.list_url("easyprivacy.txt", [f"t{i}.example" for i in range(150)])
+        with self.assertRaises(ValueError):
+            bb.fetch_tracker_list((good, self.list_url("easylist.txt", ["only.example"])))
+        self.assertEqual(bb.load_tracker_list_cache(), ({"old.example"}, 5.0))
+
+    def test_staleness(self):
+        now = time.time()
+        self.assertTrue(bb.tracker_list_is_stale(now), "nothing downloaded yet")
+        write_json(bb.TRACKER_LIST_CACHE, {"fetched": now, "domains": ["a.example"]})
+        self.assertTrue(bb.tracker_list_is_stale(now), "a cache from before EasyList was added")
+        write_json(bb.TRACKER_LIST_CACHE, {"fetched": now, "sources": list(bb.TRACKER_LIST_URLS), "domains": []})
+        self.assertFalse(bb.tracker_list_is_stale(now))
+        self.assertTrue(bb.tracker_list_is_stale(now + bb.TRACKER_LIST_MAX_AGE + 1), "a week old")
+
+
+class UrlRulesTests(TmpDirCase):
+    PROVIDERS = {
+        "globalRules": {"urlPattern": ".*", "rules": ["(?:%3F)?utm(?:_[a-z_]*)?", "(?:%3F)?[a-z]?mc"],
+                        "referralMarketing": ["(?:%3F)?ref_?"],
+                        "exceptions": ["^https?:\\/\\/(?:[a-z0-9-]+\\.)*?gitlab\\.com"]},
+        "shop": {"urlPattern": "^https?:\\/\\/(?:[a-z0-9-]+\\.)*?shop\\.example", "rules": ["tag", "pf_rd_[a-z]*"],
+                 "rawRules": ["\\/ref=[^/?]*"], "completeProvider": False},
+        "search": {"urlPattern": "^https?:\\/\\/search\\.example", "rules": ["ved"],
+                   "redirections": ["^https?:\\/\\/search\\.example\\/url\\?.*?(?:url|q)=([^&]+)"]},
+        "blocked": {"urlPattern": "^https?:\\/\\/ads\\.example", "completeProvider": True},
+        "broken": {"urlPattern": "^https?:\\/\\/broken\\.example", "rules": ["(?<bad", "id2"]},
+        "notadict": "x",
+    }
+
+    def setUp(self):
+        super().setUp()
+        self.rules = bb.compile_url_rules(self.PROVIDERS)
+
+    def clean(self, url):
+        return bb.sanitize_url(url, self.rules)
+
+    def test_site_rules(self):
+        self.assertEqual(len(self.rules), 5, "the provider that isn't a dict is skipped")
+        self.assertEqual(self.clean("https://www.shop.example/item/ref=sr_1?tag=aff&PF_RD_P=1&id=5&mc=1&amc=2"),
+                         "https://www.shop.example/item?id=5")
+        self.assertEqual(self.clean("https://other.example/?tag=aff&utm_x=1&ref=main"), "https://other.example/?tag=aff&ref=main",
+                         "site rules stay on their site; referral tags (GitHub's ?ref=) are kept")
+        self.assertEqual(self.clean("https://gitlab.com/a?mc=1&utm_source=x"), "https://gitlab.com/a?mc=1",
+                         "an exception turns the downloaded rules off, built-in ones still apply")
+        self.assertEqual(self.clean("https://ads.example/x?utm_source=1"), "https://ads.example/x", "pages are never blocked")
+        self.assertEqual(self.clean("https://broken.example/?id2=1&k=2"), "https://broken.example/?k=2",
+                         "a pattern Python can't compile is skipped, the rest still work")
+
+    def test_background_compile_never_blocks(self):
+        for name in ("URL_RULES_CACHE",):
+            self.addCleanup(setattr, bb, name, getattr(bb, name))
+        bb.URL_RULES_CACHE = os.path.join(self.tmp, "rules.json")
+        write_json(bb.URL_RULES_CACHE, {"fetched": 9, "providers": self.PROVIDERS})
+        self.assertEqual(bb.load_url_rules_cache(block=False), ([], 0.0), "not compiled yet: built-in cleaning only")
+        deadline = time.time() + 5
+        while not bb.load_url_rules_cache(block=False)[0] and time.time() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(len(bb.load_url_rules_cache(block=False)[0]), 5)
+
+    def test_tracking_redirect_is_skipped(self):
+        self.assertEqual(self.clean("https://search.example/url?ved=1&q=https%3A%2F%2Fshop.example%2Fp%3Ftag%3Da%26id%3D5&usg=2"),
+                         "https://shop.example/p?id=5", "the destination is cleaned too")
+        self.assertEqual(self.clean("https://search.example/url?q=javascript%3Aalert(1)&ved=1"),
+                         "https://search.example/url?q=javascript%3Aalert(1)", "only http(s) destinations")
+        self.assertEqual(bb.secure_and_clean_url("https://search.example/url?q=http%3A%2F%2Fnews.example%2F",
+                                                 url_rules=self.rules), ("https://news.example/", True, True),
+                         "a destination reached by skipping a redirect is upgraded to HTTPS too")
+
+    def test_fetch_falls_back_and_caches(self):
+        for name in ("URL_RULES_CACHE", "CACHE_DIR"):
+            self.addCleanup(setattr, bb, name, getattr(bb, name))
+        bb.CACHE_DIR = self.tmp
+        bb.URL_RULES_CACHE = os.path.join(self.tmp, "rules.json")
+        self.assertEqual(bb.load_url_rules_cache(), ([], 0.0))
+        providers = {f"site{i}": {"urlPattern": f"^https?:\\/\\/site{i}\\.example", "rules": ["sid"]} for i in range(60)}
+        good = os.path.join(self.tmp, "data.json")
+        write_json(good, {"providers": providers})
+        small = os.path.join(self.tmp, "small.json")
+        write_json(small, {"providers": self.PROVIDERS})
+        with self.assertRaises(ValueError):
+            bb.fetch_url_rules(("file://" + small,))
+        self.assertEqual(bb.fetch_url_rules(("file://" + os.path.join(self.tmp, "missing.json"), "file://" + good)), 60)
+        rules, fetched = bb.load_url_rules_cache()
+        self.assertEqual(len(rules), 60)
+        self.assertGreater(fetched, 0)
+        self.assertIs(bb.load_url_rules_cache()[0], rules, "compiled once, not on every navigation")
+        self.assertIs(bb.load_url_rules_cache(block=False)[0], rules)
+        self.assertEqual(bb.sanitize_url("https://site7.example/?sid=1&a=2", rules), "https://site7.example/?a=2")
 
 
 class StatsTests(TmpDirCase):

@@ -29,18 +29,19 @@
   </tr>
 </table>
 
-It is a native GTK3 desktop app, not a repackaged Chromium or Electron. The ad blocker, dark mode and tracker protection are built in-house rather than bundled copies of uBlock Origin, DarkReader or ClearURLs.
+It is a native GTK3 desktop app, not a repackaged Chromium or Electron. The ad blocker, dark mode and tracker protection are built in-house rather than bundled copies of uBlock Origin, DarkReader or ClearURLs; only their public rule lists are downloaded.
 
 ---
 
 ## ✨ Highlights
 
 **🛡️ Privacy you don't have to configure**
-- **Blocks trackers and ads out of the box**, refreshed weekly from EasyPrivacy, with a safety list so sign-in pages and captchas keep working.
+- **Blocks trackers and ads out of the box**, refreshed weekly from EasyList and EasyPrivacy, with a safety list so sign-in pages and captchas keep working.
+- **Cleans links**: removes `utm_*`, `fbclid` and hundreds of site-specific tracking tags (ClearURLs rules) and skips tracking redirects such as `google.com/url?q=`.
 - **HTTPS-only warning**: if a site can't be reached securely, *you* decide whether to continue over HTTP. There is no silent downgrade.
 - **Per-site controls** from the 🔒 icon: ads, JavaScript, zoom and camera/location/notification permissions, remembered site by site.
 - **Passwords stay in your system keyring** (GNOME Keyring, KWallet or KeePassXC), never in the browser's own files, and only fill when you click.
-- **Leak and fingerprint protection**: third-party cookies blocked, WebRTC off by default (so it can't expose your IP), and your real GPU details hidden from websites.
+- **Leak and fingerprint protection**: third-party cookies blocked, WebRTC off by default (so it can't expose your IP), your real GPU details hidden from websites, and canvas and audio fingerprints given tiny per-site changes so they can't be used to recognise your computer.
 - **Privacy report** to see what was stopped, and **private windows** that write nothing to disk.
 
 **🧭 Everyday touches**
@@ -294,7 +295,8 @@ Bharat Browser has **no telemetry, analytics or accounts**. Besides the sites yo
 | What | To | When | Turn off |
 |---|---|---|---|
 | Update check | `api.github.com`, `raw.githubusercontent.com` | ~30 s after launch, and when you click *Check for updates* | n/a (it only reads a small version file) |
-| Tracker list | `easylist.to` | About once a week | Settings → Privacy & Security → *Keep the tracker list up to date* |
+| Ad and tracker lists | `easylist.to` | About once a week | Settings → Privacy & Security → *Keep the block lists up to date* |
+| Link-cleaning rules | `rules2.clearurls.xyz` (or `gitlab.com` if that's down) | About once a week | Same switch |
 | Link / DNS prefetch | the pages you hover over | While browsing | n/a |
 
 **Where your data lives:** settings, history, bookmarks, session, per-site settings, cookies and statistics are in `~/.config/bharat-browser` (readable only by you); cache in `~/.cache/bharat-browser`; passwords only in your system keyring. Private windows write none of it to disk.
@@ -322,7 +324,7 @@ That's roughly **500–1000× smaller**. Chrome, Firefox, Chromium, Brave and Ed
 
 ## 🙏 Credits
 
-Built on [WebKitGTK](https://webkitgtk.org/) and [PyGObject](https://pygobject.gnome.org/). The optional weekly tracker list is [EasyPrivacy](https://easylist.to/) by the EasyList authors.
+Built on [WebKitGTK](https://webkitgtk.org/) and [PyGObject](https://pygobject.gnome.org/). The optional weekly block lists are [EasyList and EasyPrivacy](https://easylist.to/) by the EasyList authors, and the link-cleaning rules are [ClearURLs](https://gitlab.com/ClearURLs/rules) by Kevin Röbert and contributors. Both are downloaded at runtime, not shipped in the package.
 
 ## 📄 License
 
