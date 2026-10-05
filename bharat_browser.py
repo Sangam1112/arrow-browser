@@ -311,6 +311,47 @@ def sanitize_url(url_str):
     except Exception:
         return url_str
 
+
+def secure_and_clean_url(uri, upgrade_https=True, strip_tracking=True, http_allowed_hosts=()):
+    """The address to actually load: http:// upgraded to https:// (except local-network hosts and hosts the
+    user chose to visit over HTTP) and tracking parameters removed. Returns (uri, upgraded, stripped).
+    Applied before a load starts: WebKitGTK ignores a request rewritten from resource-load-started."""
+    upgraded = stripped = False
+    if upgrade_https and uri.startswith("http://"):
+        host = site_host_of(uri)
+        if host and not is_local_network_host(host) and host not in http_allowed_hosts:
+            uri = "https://" + uri[len("http://"):]
+            upgraded = True
+    if strip_tracking:
+        cleaned = sanitize_url(uri)
+        stripped = cleaned != uri
+        uri = cleaned
+    return uri, upgraded, stripped
+
+
+def startup_urls_from_args(args):
+    """Addresses passed on the command line (the desktop file's %U: links opened from other apps, or local
+    files). Plain paths become file:// URIs; anything that isn't http(s)/file is dropped."""
+    urls = []
+    for arg in args:
+        if not arg or arg.startswith("-"):
+            continue
+        if arg.startswith(("http://", "https://", "file://")):
+            urls.append(arg)
+        elif os.path.exists(arg):
+            urls.append(GLib.filename_to_uri(os.path.abspath(arg)))
+    return urls
+
+
+def download_filename(suggested, uri=""):
+    """A safe file name for a download: the server's suggested name (Content-Disposition), else the last part of
+    the address, never a path."""
+    for candidate in (suggested, urllib.parse.unquote(urllib.parse.urlparse(uri or "").path.rsplit("/", 1)[-1])):
+        name = (candidate or "").replace("/", "_").replace("\0", "").strip()
+        if name and name not in (".", ".."):
+            return name
+    return "download"
+
 # Tracks how many top-level BharatBrowserWindow instances (the main window
 # plus any private windows, which are siblings, not children, of it) are
 # still open, so Gtk.main_quit() only fires once the last one closes instead
@@ -1748,7 +1789,7 @@ TYPED_TEXT_WORLD = "bharat-sleep"
 class BharatBrowserWindow(Gtk.Window):
     _global_css_loaded = False
 
-    def __init__(self, private=False):
+    def __init__(self, private=False, startup_urls=()):
         self.current_version = APP_VERSION
         self.is_private = private
         title_suffix = " (Private)" if private else ""
@@ -2010,7 +2051,7 @@ class BharatBrowserWindow(Gtk.Window):
         # URL Entry with dynamic security icon
         self.url_entry = Gtk.Entry()
         self.url_entry.get_style_context().add_class("url-entry")
-        self.url_entry.set_placeholder_text("Search Google or enter URL...")
+        self.url_entry.set_placeholder_text(f"Search {self.search_engine} or enter URL...")
         self.url_entry.set_icon_from_icon_name(Gtk.EntryIconPosition.PRIMARY, "channel-insecure-symbolic")
         self.url_entry.connect("activate", self.on_url_activate)
         self.url_entry.connect("changed", self.on_url_entry_changed)
@@ -2270,15 +2311,23 @@ class BharatBrowserWindow(Gtk.Window):
 
         # Restore Session or Open Initial Tab (private windows never read or
         # write session.json, so no private URL ever touches disk)
+        # Links opened from other apps (startup_urls) open as tabs after the restored ones and replace the
+        # homepage tab.
+        startup_urls = list(startup_urls)
         if self.is_private or self.open_homepage_on_startup:
-            self.create_new_tab(self.homepage)
+            if not startup_urls:
+                self.create_new_tab(self.homepage)
         else:
             saved_session = load_session_state()
             restored_pins = [i for i in saved_session.get("pinned", []) if isinstance(i, int)]
             initial_urls = saved_session.get("urls", [])
             if isinstance(initial_urls, str):
                 initial_urls = [initial_urls]
-            self.restore_tabs(initial_urls or [self.homepage], restored_pins)
+            if not initial_urls and not startup_urls:
+                initial_urls = [self.homepage]
+            self.restore_tabs(initial_urls, restored_pins, activate=not startup_urls)
+        for url in startup_urls:
+            self.create_new_tab(url)
 
         # Refresh the downloaded tracker list in the background if it's stale.
         if not self.is_private:
@@ -2930,7 +2979,6 @@ class BharatBrowserWindow(Gtk.Window):
         sig_ids.append((webview, webview.connect("mouse-target-changed", self.on_mouse_target_changed)))
         sig_ids.append((webview, webview.connect("notify::title", self.on_webview_title_notify)))
         sig_ids.append((webview, webview.connect("notify::uri", self.on_webview_uri_notify)))
-        sig_ids.append((webview, webview.connect("resource-load-started", self.on_resource_load_started)))
         sig_ids.append((webview, webview.connect("web-process-terminated", self.on_web_process_terminated)))
         sig_ids.append((webview, webview.connect("permission-request", self.on_permission_request)))
         sig_ids.append((webview, webview.connect("load-failed-with-tls-errors", self.on_load_failed_with_tls_errors)))
@@ -3007,13 +3055,14 @@ class BharatBrowserWindow(Gtk.Window):
         self.notebook.set_current_page(page_num)
 
         if load_initial_uri:
-            webview.load_uri(url or self.homepage)
+            webview.load_uri(self._secure_uri(url or self.homepage))
         return webview
 
-    def restore_tabs(self, urls, pinned=()):
+    def restore_tabs(self, urls, pinned=(), activate=True):
         """Reopen the last session. Every tab comes back, but only the one you land on
         loads now; each of the others loads the first time you open it, so restoring
-        many tabs doesn't start a renderer (about 200 MB or more) for each of them."""
+        many tabs doesn't start a renderer (about 200 MB or more) for each of them.
+        activate=False leaves even that one asleep (a link from another app opens next)."""
         self._restoring_session = True
         try:
             for url in urls:
@@ -3024,7 +3073,7 @@ class BharatBrowserWindow(Gtk.Window):
         finally:
             self._restoring_session = False
         active = self.get_active_tab_box()
-        if active is not None and id(active) in self._suspended_session_states:
+        if activate and active is not None and id(active) in self._suspended_session_states:
             self._reactivate_tab(active)
 
     def on_webview_enter_fullscreen(self, webview):
@@ -3620,10 +3669,12 @@ class BharatBrowserWindow(Gtk.Window):
         self.statusbar.push(self.context_id, "⚠️ Web process recovered automatically.")
 
     def on_decide_policy(self, webview, decision, decision_type):
+        if decision_type == WebKit2.PolicyDecisionType.NAVIGATION_ACTION:
+            return self._secure_first_navigation(webview, decision)
         # Only response decisions (i.e. we already have headers back and
-        # know the content type) carry is_mime_type_supported(); navigation/
-        # new-window decisions don't have a response yet, so leave those to
-        # WebKit's own default handling.
+        # know the content type) carry is_mime_type_supported(); new-window
+        # decisions don't have a response yet, so leave those to WebKit's
+        # own default handling.
         if decision_type != WebKit2.PolicyDecisionType.RESPONSE:
             return False
         if not decision.is_mime_type_supported():
@@ -3633,6 +3684,26 @@ class BharatBrowserWindow(Gtk.Window):
             decision.download()
             return True
         return False
+
+    def _secure_first_navigation(self, webview, decision):
+        """A tab opened by a page (target="_blank" link, window.open) gets its first address here instead of
+        through _secure_uri(). Nothing has been committed in it yet (no back/forward entry), so this is its main
+        frame. Later navigations are left alone: WebKitGTK reports iframe navigations the same way, and loading
+        an iframe's address in the tab would replace the whole page. Server redirects are left alone too, so a
+        site that redirects https:// back to http:// can't make this loop."""
+        action = decision.get_navigation_action()
+        if webview.get_back_forward_list().get_current_item() is not None or action.is_redirect():
+            return False
+        request = action.get_request()
+        uri = request.get_uri() or ""
+        if (request.get_http_method() or "GET").upper() != "GET":
+            return False
+        new_uri = self._secure_uri(uri)
+        if new_uri == uri:
+            return False
+        decision.ignore()
+        GLib.idle_add(lambda: (webview.load_uri(new_uri), False)[1])
+        return True
 
     def on_load_failed_with_tls_errors(self, webview, failing_uri, certificate, errors):
         # No "proceed anyway" bypass: this is a privacy/security-first
@@ -3952,34 +4023,42 @@ class BharatBrowserWindow(Gtk.Window):
             counter += 1
 
     def on_download_started(self, context, download):
-        downloads_dir = self.get_downloads_dir()
-
-        filename = "downloaded_file"
-        try:
-            req = download.get_request()
-            if req and req.get_uri():
-                filename = os.path.basename(urllib.parse.urlparse(req.get_uri()).path) or "downloaded_file"
-        except Exception as e:
-            print("Download filename resolution note:", e)
-
-        target_path = self.unique_download_path(downloads_dir, filename)
-        filename = os.path.basename(target_path)
-        download.set_destination("file://" + target_path)
-
-        entry = {"filename": filename, "path": target_path, "status": "Downloading..."}
+        # The file name is chosen in decide-destination, once the response has arrived: only then does WebKit
+        # know the name the server suggests (Content-Disposition), e.g. "Report.pdf" for ".../download?id=7".
+        req = download.get_request()
+        uri = (req.get_uri() if req else "") or ""
+        entry = {"filename": download_filename("", uri), "path": "", "status": "Downloading..."}
         self.downloads_history.append(entry)
-        self.statusbar.push(self.context_id, f"📥 Download Started: {filename} -> {downloads_dir}")
-
-        download.connect("finished", lambda d: self.on_download_finished(entry))
+        download.connect("decide-destination", self.on_download_decide_destination, entry)
+        download.connect("finished", lambda d: self.on_download_finished(entry, d))
         download.connect("failed", lambda d, err: self.on_download_failed(entry, err))
 
-    def on_download_finished(self, entry):
+    def on_download_decide_destination(self, download, suggested_filename, entry):
+        downloads_dir = self.get_downloads_dir()
+        req = download.get_request()
+        target_path = self.unique_download_path(
+            downloads_dir, download_filename(suggested_filename, (req.get_uri() if req else "") or ""))
+        download.set_destination(GLib.filename_to_uri(target_path))
+        entry["filename"], entry["path"] = os.path.basename(target_path), target_path
+        self.statusbar.push(self.context_id, f"📥 Download Started: {entry['filename']} -> {downloads_dir}")
+        return True
+
+    def on_download_finished(self, entry, download=None):
+        # WebKit emits "finished" after "failed" as well.
+        if entry["status"] != "Downloading...":
+            return
+        # A connection that drops part-way also ends in "finished", with no "failed".
+        response = download.get_response() if download is not None else None
+        expected = response.get_content_length() if response is not None else 0
+        if expected and download.get_received_data_length() < expected:
+            self.on_download_failed(entry, "the connection closed before the whole file arrived")
+            return
         entry["status"] = "Completed ✅"
         self.statusbar.push(self.context_id, f"✅ Download Completed: {entry['filename']}")
 
     def on_download_failed(self, entry, error):
         entry["status"] = "Failed ❌"
-        self.statusbar.push(self.context_id, f"❌ Download Failed: {entry['filename']} ({error})")
+        self.statusbar.push(self.context_id, f"❌ Download Failed: {entry['filename']} ({getattr(error, 'message', error)})")
 
     def on_downloads_clicked(self, btn):
         dialog = Gtk.Dialog(
@@ -4215,7 +4294,8 @@ class BharatBrowserWindow(Gtk.Window):
                 self._flush_page_view(tab_box._bharat_webview)
         try:
             script = getattr(self, '_installed_script_path', None) or os.path.abspath(__file__)
-            os.execv(sys.executable, [sys.executable, script] + sys.argv[1:])
+            # No arguments: links the browser was started with are already in the saved session.
+            os.execv(sys.executable, [sys.executable, script])
         except Exception as e:
             print("Restart failed:", e)
 
@@ -4258,28 +4338,20 @@ class BharatBrowserWindow(Gtk.Window):
             self.push_notification_status(f"⬆️ Update v{version_str} available (auto-install needs write access)")
             GLib.timeout_add_seconds(8, lambda: (self.update_dialog_box.hide(), False)[1])
 
-    def on_resource_load_started(self, webview, resource, request):
-        uri = request.get_uri()
-        if not uri:
-            return
-
-        if self.https_enabled and uri.startswith("http://"):
-            host = (urllib.parse.urlparse(uri).hostname or '').lower()
-            if not is_local_network_host(host) and host not in self._http_allowed_hosts:
-                new_uri = uri.replace("http://", "https://", 1)
-                request.set_uri(new_uri)
-                uri = new_uri
-                if len(self._recent_https_upgrades) > 200:
-                    self._recent_https_upgrades.clear()
-                self._recent_https_upgrades[host] = time.monotonic()
-                self._count_event("https")
-
-        if self.clearurls_enabled:
-            sanitized = sanitize_url(uri)
-            if sanitized != uri:
-                request.set_uri(sanitized)
-                uri = sanitized
-                self._count_event("params")
+    def _secure_uri(self, uri):
+        """The address to load for one the browser opens itself (address bar, new tab, bookmark, a link from
+        another app, a popup's first page): upgraded to HTTPS and with tracking parameters removed, per the
+        Settings. Counted for the Privacy Report only when something really changed."""
+        new_uri, upgraded, stripped = secure_and_clean_url(
+            uri, self.https_enabled, self.clearurls_enabled, self._http_allowed_hosts)
+        if upgraded:
+            if len(self._recent_https_upgrades) > 200:
+                self._recent_https_upgrades.clear()
+            self._recent_https_upgrades[site_host_of(new_uri)] = time.monotonic()
+            self._count_event("https")
+        if stripped:
+            self._count_event("params")
+        return new_uri
 
     def on_url_activate(self, entry):
         text = entry.get_text().strip()
@@ -4290,8 +4362,8 @@ class BharatBrowserWindow(Gtk.Window):
             looks_like_url = " " not in text and ("." in host_candidate or is_local_network_host(host_candidate))
             if looks_like_url:
                 # Bare local hostnames (routers, printers, dev boxes) rarely
-                # have a real HTTPS cert to upgrade to; real FQDNs still go
-                # through the on_resource_load_started HTTPS-upgrade path.
+                # have a real HTTPS cert to upgrade to; _secure_uri() below
+                # leaves them on http:// too.
                 scheme = "http://" if is_local_network_host(host_candidate) else "https://"
                 text = scheme + text
             else:
@@ -4300,7 +4372,7 @@ class BharatBrowserWindow(Gtk.Window):
 
         webview = self.get_active_webview()
         if webview:
-            webview.load_uri(text)
+            webview.load_uri(self._secure_uri(text))
             webview.grab_focus()  # as other browsers do; the address bar then follows the page again
 
     # DNS pre-resolution: warm WebKit's resolver for a host the user is likely
@@ -5007,7 +5079,8 @@ class BharatBrowserWindow(Gtk.Window):
         for engine_name in SEARCH_ENGINES:
             search_combo.append_text(engine_name)
         search_combo.set_active(list(SEARCH_ENGINES.keys()).index(self.search_engine))
-        search_combo.connect("changed", lambda cb: (setattr(self, 'search_engine', cb.get_active_text()), self.save_settings()))
+        search_combo.connect("changed", lambda cb: (setattr(self, 'search_engine', cb.get_active_text()), self.save_settings(),
+                                                    self.url_entry.set_placeholder_text(f"Search {self.search_engine} or enter URL...")))
         controls["search_engine"] = search_combo
 
         btn_change_folder = Gtk.Button(label="Change…")
@@ -5340,7 +5413,9 @@ class BharatBrowserWindow(Gtk.Window):
         """A copy of the window's WebKit settings with this site's choices: JavaScript off and/or the Chrome UA."""
         clone = WebKit2.Settings()
         for prop in self.web_settings.list_properties():
-            if prop.flags & GObject.ParamFlags.WRITABLE and not prop.flags & GObject.ParamFlags.CONSTRUCT_ONLY:
+            # Deprecated properties are skipped: reading them only makes WebKit print a warning.
+            if (prop.flags & GObject.ParamFlags.WRITABLE and not prop.flags & GObject.ParamFlags.CONSTRUCT_ONLY
+                    and not prop.flags & GObject.ParamFlags.DEPRECATED):
                 try:
                     clone.set_property(prop.name, self.web_settings.get_property(prop.name))
                 except Exception:
@@ -6370,7 +6445,7 @@ td.c{{text-align:right;color:#cbd5e1;width:70px}}td.b{{width:30%}}td.b span{{dis
         dialog.destroy()
 
 def main():
-    app = BharatBrowserWindow()
+    app = BharatBrowserWindow(startup_urls=startup_urls_from_args(sys.argv[1:]))
     # Quitting is handled by on_window_destroy() (connected in __init__),
     # which only calls Gtk.main_quit() once every open top-level window
     # (main + any private windows) has actually closed.

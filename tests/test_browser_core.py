@@ -37,6 +37,30 @@ class UrlHelperTests(unittest.TestCase):
         self.assertEqual(bb.sanitize_url("https://x.com/a?id=5"), "https://x.com/a?id=5")
         self.assertEqual(bb.sanitize_url("https://x.com/a"), "https://x.com/a")
 
+    def test_secure_and_clean_url(self):
+        f = bb.secure_and_clean_url
+        self.assertEqual(f("http://x.com/a?utm_source=t&id=5"), ("https://x.com/a?id=5", True, True))
+        self.assertEqual(f("https://x.com/a?id=5"), ("https://x.com/a?id=5", False, False))
+        self.assertEqual(f("http://192.168.1.1/admin"), ("http://192.168.1.1/admin", False, False), "LAN stays http")
+        self.assertEqual(f("http://router/"), ("http://router/", False, False))
+        self.assertEqual(f("http://x.com/", http_allowed_hosts={"x.com"}), ("http://x.com/", False, False))
+        self.assertEqual(f("http://x.com/?gclid=1", upgrade_https=False, strip_tracking=False),
+                         ("http://x.com/?gclid=1", False, False), "both settings off")
+        self.assertEqual(f("about:blank"), ("about:blank", False, False))
+
+    def test_startup_urls_from_args(self):
+        self.assertEqual(bb.startup_urls_from_args(["https://x.com/", "", "--flag", "javascript:alert(1)",
+                                                    "no-such-file", __file__, "http://y.org"]),
+                         ["https://x.com/", bb.GLib.filename_to_uri(os.path.abspath(__file__)), "http://y.org"])
+
+    def test_download_filename(self):
+        f = bb.download_filename
+        self.assertEqual(f("Report 2026.pdf", "https://x.com/dl?id=7"), "Report 2026.pdf")
+        self.assertEqual(f("", "https://x.com/files/My%20File.zip"), "My File.zip", "address part is decoded")
+        self.assertEqual(f("../../etc/passwd"), ".._.._etc_passwd", "never a path")
+        self.assertEqual(f("", "https://x.com/"), "download")
+        self.assertEqual(f("..", ""), "download")
+
     def test_homepage_rejects_dangerous_schemes(self):
         for bad in ("javascript:alert(1)", "data:text/html,x", "file:///etc/passwd", ""):
             self.assertEqual(bb.sanitize_homepage_url(bad), bb.DEFAULT_HOMEPAGE)

@@ -52,15 +52,37 @@ PAGES = {
     # a single-page site (like YouTube): moves to another address without loading a new page
     "/spa": ("<html><title>spa</title><body><script>window.go=n=>history.pushState({},'','/spa/watch?v='+n)"
              "</script></body></html>"),
+    "/framed": "<html><title>framed</title><body><iframe src='/thin?utm_source=frame'></iframe></body></html>",
+    "/opener": "<html><title>opener</title><body><a id='p' target='_blank' href='/done?utm_source=mail&k=1'>open</a></body></html>",
 }
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
     hits = {}
+    requests = []  # full paths, query included
 
     def do_GET(self):
         path = self.path.split("?")[0]
         Handler.hits[path] = Handler.hits.get(path, 0) + 1
+        Handler.requests.append(self.path)
+        if path == "/dl":  # the real name only comes in Content-Disposition
+            body = b"%PDF-1.4 test"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", 'attachment; filename="Report 2026.pdf"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path == "/broken.zip":  # promises more than it sends, then hangs up
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Length", "100000")
+            self.end_headers()
+            self.wfile.write(b"PK" * 5)
+            self.wfile.flush()
+            self.close_connection = True
+            return
         if path == "/pixel" or path.endswith(".png"):
             body, ctype = b"\x89PNG", "image/png"
         else:
@@ -158,6 +180,7 @@ class WindowFeatureTests(unittest.TestCase):
         self.win.site_settings.clear()
         self.win._clear_infobar()
         Handler.hits.clear()
+        Handler.requests.clear()
 
     def load(self, path, wait_title=None):
         wv = self.win.get_active_webview()
@@ -226,6 +249,89 @@ class WindowFeatureTests(unittest.TestCase):
         win.on_url_activate(win.url_entry)
         spin(lambda: False, 0.2)
         self.assertFalse(win.url_entry.has_focus())
+
+    # ---- HTTPS upgrade + tracking parameters ------------------------------
+    def test_typed_address_loses_its_tracking_parameters(self):
+        win = self.win
+        before = win.stats["params"]
+        win.url_entry.set_text(self.base + "/done?utm_source=mail&k=1")
+        win.on_url_activate(win.url_entry)
+        self.assertTrue(spin(lambda: "/done?k=1" in Handler.requests, 8), Handler.requests)
+        self.assertNotIn("/done?utm_source=mail&k=1", Handler.requests, "the site never sees the tracking tag")
+        self.assertEqual(win.stats["params"], before + 1)
+
+    def test_tab_opened_by_a_link_loses_its_tracking_parameters(self):
+        self.addCleanup(self.close_new_tabs, self.win._tab_boxes())
+        opener = self.open_tab("/opener", "opener")._bharat_webview
+        count = self.win.notebook.get_n_pages()
+        js(opener, "document.getElementById('p').click()")
+        self.assertTrue(spin(lambda: "/done?k=1" in Handler.requests, 8), Handler.requests)
+        self.assertEqual(self.win.notebook.get_n_pages(), count + 1, "opened in a new tab")
+        self.assertNotIn("/done?utm_source=mail&k=1", Handler.requests)
+
+    def test_iframe_in_a_new_tab_is_never_loaded_as_the_page(self):
+        self.addCleanup(self.close_new_tabs, self.win._tab_boxes())
+        tab = self.open_tab("/framed", "framed")
+        self.assertTrue(spin(lambda: Handler.hits.get("/thin", 0) > 0, 5))
+        spin(lambda: False, 0.5)
+        self.assertEqual(tab._bharat_webview.get_uri(), self.base + "/framed", "the tab still shows its own page")
+
+    def test_http_is_really_upgraded_and_warns_when_https_fails(self):
+        # 127.0.0.1 is never upgraded (local network); pretend it's a public site. The test server only
+        # speaks plain HTTP, so the upgraded load must fail and show the HTTPS warning.
+        self.addCleanup(self.close_new_tabs, self.win._tab_boxes())
+        real = bb.is_local_network_host
+        bb.is_local_network_host = lambda host: False
+        self.addCleanup(setattr, bb, "is_local_network_host", real)
+        before = self.win.stats["https"]
+        wv = self.win.create_new_tab(self.base + "/blank")
+        self.assertTrue((wv.get_uri() or "").startswith("https://"), wv.get_uri())
+        self.assertTrue(spin(lambda: "Secure connection unavailable" in (js(wv, "document.body.innerText") or ""), 15))
+        self.assertEqual(self.win.stats["https"], before + 1)
+        self.assertNotIn("/blank", Handler.requests, "nothing was sent over plain HTTP")
+
+    # ---- downloads ------------------------------------------------------
+    def start_download(self, path):
+        count = len(self.win.downloads_history)
+        self.win.context.download_uri(self.base + path)
+        self.assertTrue(spin(lambda: len(self.win.downloads_history) > count, 5), "download never started")
+        return self.win.downloads_history[-1]
+
+    def test_download_uses_the_servers_file_name(self):
+        folder = tempfile.mkdtemp(dir=_HOME)
+        self.win.download_dir = folder
+        self.addCleanup(setattr, self.win, "download_dir", "")
+        entry = self.start_download("/dl?id=7")
+        self.assertTrue(spin(lambda: entry["status"] != "Downloading...", 10), entry)
+        self.assertEqual(entry["status"], "Completed ✅")
+        self.assertIn(entry["filename"], ("Report 2026.pdf", "Report_2026.pdf"))  # WebKit may swap spaces for _
+        with open(os.path.join(folder, entry["filename"]), "rb") as f:
+            self.assertEqual(f.read(), b"%PDF-1.4 test")
+        second = self.start_download("/dl?id=7")
+        self.assertTrue(spin(lambda: second["status"] != "Downloading...", 10))
+        self.assertNotEqual(second["path"], entry["path"], "an existing file is never overwritten")
+
+    def test_failed_download_stays_failed(self):
+        self.win.download_dir = tempfile.mkdtemp(dir=_HOME)
+        self.addCleanup(setattr, self.win, "download_dir", "")
+        entry = self.start_download("/broken.zip")
+        self.assertTrue(spin(lambda: entry["status"] != "Downloading...", 10), entry)
+        spin(lambda: False, 0.5)
+        self.assertEqual(entry["status"], "Failed ❌", "a cut-off download is not reported as completed")
+        cancelled = {"filename": "x", "path": "", "status": "Downloading..."}
+        self.win.on_download_failed(cancelled, "cancelled")
+        self.win.on_download_finished(cancelled)  # WebKit emits "finished" after "failed"
+        self.assertEqual(cancelled["status"], "Failed ❌")
+
+    # ---- links from other apps ---------------------------------------------
+    def test_links_passed_at_startup_open_as_tabs(self):
+        win = bb.BharatBrowserWindow(private=True, startup_urls=[self.base + "/done", self.base + "/thin"])
+        try:
+            uris = [tb._bharat_webview.get_uri() for tb in win._tab_boxes()]
+            self.assertEqual(uris, [self.base + "/done", self.base + "/thin"], "no extra homepage tab")
+            self.assertEqual(win.get_active_webview().get_uri(), self.base + "/thin")
+        finally:
+            win.destroy()
 
     # ---- per-site policy ------------------------------------------------
     def test_per_site_javascript(self):
