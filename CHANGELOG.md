@@ -3,6 +3,13 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.5.2] - 2026-10-05
+
+### Fixed
+- **The whole computer could freeze on older AMD laptops** (Radeon R2/R3 "Mullins" and similar) that use the legacy `radeon` driver: WebKit's GPU drawing hit a GPU lockup that only a hard power-off cleared. On the `radeon` driver, GPU acceleration is now off by default. The "Use hardware acceleration" switch in Settings → Performance also really turns the GPU off now; before, a setting it couldn't override kept the GPU on. The change applies after a restart.
+- **The browser crashed when a site opened a popup with GPU acceleration off.** Turning the GPU off also turned off WebGL, and with WebGL off any page opening a new window crashed WebKit. WebGL now stays on, so with the GPU off, 3D content (maps, games) still uses the graphics card; everything else is drawn on the CPU.
+- **The browser could crash at random with GPU acceleration off.** It switched off a WebKit drawing component that pages sometimes still use. Pages are now drawn on the CPU while that component stays available. The old behaviour is kept only on the `radeon` driver, where a GPU lockup freezes the whole desktop.
+
 ## [1.5.1] - 2026-10-04
 
 ### Changed

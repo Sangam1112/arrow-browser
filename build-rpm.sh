@@ -58,6 +58,8 @@ cp -r ${BUILD_ROOT}/* %{buildroot}/
 /usr/share/icons/hicolor/256x256/apps/bharat-browser.png
 
 %changelog
+* Mon Oct 05 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.2-1
+- Fix two crashes with GPU acceleration off and a desktop freeze on the radeon driver
 * Sun Oct 04 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.1-1
 - Sleeping tabs now free all their memory; restored tabs load only when opened; tabs sleep sooner when memory runs low
 * Sun Oct 04 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.0-1
