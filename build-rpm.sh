@@ -66,6 +66,8 @@ python3 -m py_compile /usr/share/bharat-browser/bharat_browser.py >/dev/null 2>&
 if [ \$1 -eq 0 ]; then rm -rf /usr/share/bharat-browser/__pycache__; fi
 
 %changelog
+* Tue Oct 06 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.8-1
+- Fullscreen video no longer black with GPU acceleration off, and keeps playing after leaving fullscreen
 * Tue Oct 06 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.7-1
 - Captcha checks (reCAPTCHA, hCaptcha, Arkose) no longer see altered canvas/audio values
 * Tue Oct 06 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.6-1

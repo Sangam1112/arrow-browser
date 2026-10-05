@@ -3,6 +3,12 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.5.8] - 2026-10-06
+
+### Fixed
+- **Fullscreen video was a black screen with GPU acceleration off.** Only the play/pause controls showed. With the GPU off, the browser told WebKit never to use hardware acceleration, and WebKitGTK 2.52 can't show a fullscreen video that way. Acceleration is now switched on just while something is fullscreen and off again when you leave; pages are still drawn on the CPU and the setting stays off. On computers using the old `radeon` driver this doesn't help, and nothing changes there.
+- **Video froze after leaving fullscreen.** After Esc or the exit button, a playing video stopped on its current frame while still showing as playing, with GPU acceleration on or off. This is a WebKitGTK 2.52 bug; the browser now restarts a playing video when a page leaves fullscreen, including players embedded in other sites (iframes).
+
 ## [1.5.7] - 2026-10-06
 
 ### Fixed
