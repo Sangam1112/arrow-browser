@@ -2929,6 +2929,7 @@ class BharatBrowserWindow(Gtk.Window):
         sig_ids.append((webview, webview.connect("load-changed", self.on_load_changed)))
         sig_ids.append((webview, webview.connect("mouse-target-changed", self.on_mouse_target_changed)))
         sig_ids.append((webview, webview.connect("notify::title", self.on_webview_title_notify)))
+        sig_ids.append((webview, webview.connect("notify::uri", self.on_webview_uri_notify)))
         sig_ids.append((webview, webview.connect("resource-load-started", self.on_resource_load_started)))
         sig_ids.append((webview, webview.connect("web-process-terminated", self.on_web_process_terminated)))
         sig_ids.append((webview, webview.connect("permission-request", self.on_permission_request)))
@@ -4300,6 +4301,7 @@ class BharatBrowserWindow(Gtk.Window):
         webview = self.get_active_webview()
         if webview:
             webview.load_uri(text)
+            webview.grab_focus()  # as other browsers do; the address bar then follows the page again
 
     # DNS pre-resolution: warm WebKit's resolver for a host the user is likely
     # to visit next, shaving the lookup off the real navigation. Resolution
@@ -4601,6 +4603,16 @@ class BharatBrowserWindow(Gtk.Window):
 
     def on_webview_title_notify(self, webview, pspec):
         self._apply_display_title(webview)
+
+    def on_webview_uri_notify(self, webview, pspec):
+        """Keep the address bar on the page's real address. Single-page sites (YouTube, Gmail) change it
+        without ever finishing a new load, and a slow page would otherwise show the previous address
+        until it finished. Leaves the bar alone while the user is typing in it."""
+        if webview is not self.get_active_webview() or self.url_entry.has_focus():
+            return
+        uri = webview.get_uri() or ""
+        self.url_entry.set_text(uri)
+        self.update_security_icon(uri)
 
     def on_load_changed(self, webview, load_event):
         if load_event in (WebKit2.LoadEvent.STARTED, WebKit2.LoadEvent.REDIRECTED):

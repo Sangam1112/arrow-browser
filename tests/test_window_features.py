@@ -49,6 +49,9 @@ PAGES = {
                    "let a=new Float64Array(1000000);a.fill(i+1);window.keep.push(a)}</script>heavy</body></html>"),
     "/form": "<html><title>form</title><body><textarea id='t'></textarea></body></html>",
     "/third": "<html><title>third</title><body><img src='http://localhost:%PORT%/pixel'></body></html>",
+    # a single-page site (like YouTube): moves to another address without loading a new page
+    "/spa": ("<html><title>spa</title><body><script>window.go=n=>history.pushState({},'','/spa/watch?v='+n)"
+             "</script></body></html>"),
 }
 
 
@@ -196,6 +199,33 @@ class WindowFeatureTests(unittest.TestCase):
         count = win.notebook.get_n_pages()
         win._on_tab_header_click(win.get_active_tab_box(), ev)
         self.assertEqual(win.notebook.get_n_pages(), count - 1, "middle-click closes the tab")
+
+    # ---- address bar ----------------------------------------------------
+    def test_address_bar_follows_single_page_navigation(self):
+        win = self.win
+        wv = self.load("/spa")
+        win.get_active_webview().grab_focus()
+        js(wv, "go(1)")
+        self.assertTrue(spin(lambda: win.url_entry.get_text().endswith("/spa/watch?v=1"), 5),
+                        "address bar shows the page's new address: " + win.url_entry.get_text())
+
+    def test_address_bar_keeps_what_you_type(self):
+        win = self.win
+        wv = self.load("/spa")
+        win.url_entry.grab_focus()
+        win.url_entry.set_text("half-typed")
+        js(wv, "go(2)")
+        spin(lambda: (wv.get_uri() or "").endswith("v=2"), 5)
+        self.assertEqual(win.url_entry.get_text(), "half-typed")
+        wv.grab_focus()
+
+    def test_enter_in_address_bar_hands_focus_to_the_page(self):
+        win = self.win
+        win.url_entry.grab_focus()
+        win.url_entry.set_text(self.base + "/blank")
+        win.on_url_activate(win.url_entry)
+        spin(lambda: False, 0.2)
+        self.assertFalse(win.url_entry.has_focus())
 
     # ---- per-site policy ------------------------------------------------
     def test_per_site_javascript(self):
