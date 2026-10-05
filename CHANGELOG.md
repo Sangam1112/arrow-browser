@@ -3,6 +3,14 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.5.3] - 2026-10-05
+
+### Fixed
+- **The address bar could show the wrong site**, for example google.com on a YouTube tab. It only updated when you switched tabs or a page finished loading. Sites like YouTube and Gmail change their address without loading a new page, and a slow page kept showing the previous site's address until it finished. The address bar now follows the page's real address as it changes, but never overwrites what you're typing in it.
+
+### Changed
+- Pressing Enter in the address bar now moves the focus to the page, as other browsers do.
+
 ## [1.5.2] - 2026-10-05
 
 ### Fixed

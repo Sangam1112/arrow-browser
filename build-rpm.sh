@@ -58,6 +58,8 @@ cp -r ${BUILD_ROOT}/* %{buildroot}/
 /usr/share/icons/hicolor/256x256/apps/bharat-browser.png
 
 %changelog
+* Mon Oct 05 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.3-1
+- The address bar shows the right address on YouTube and other single-page sites
 * Mon Oct 05 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.2-1
 - Fix two crashes with GPU acceleration off and a desktop freeze on the radeon driver
 * Sun Oct 04 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.1-1
