@@ -3,6 +3,12 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.5.14] - 2026-10-06
+
+### Fixed
+- **Typing in the address bar of an open tab took you back to the same site.** Clicking into the address bar put the cursor where you clicked instead of selecting the address, so whatever you typed was inserted into the current address, and Enter just reloaded that page. The first click now selects the whole address, as in other browsers, so typing replaces it. A second click places the cursor for editing.
+- **The address bar could wipe out what you were typing.** When the page in the tab finished loading while you typed, the bar was reset to the page's address. It now leaves your text alone while you're typing, as it already did for sites like YouTube that change address without reloading.
+
 ## [1.5.13] - 2026-10-06
 
 ### Fixed

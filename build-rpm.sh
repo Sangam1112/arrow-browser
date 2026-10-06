@@ -66,6 +66,8 @@ python3 -m py_compile /usr/share/bharat-browser/bharat_browser.py >/dev/null 2>&
 if [ \$1 -eq 0 ]; then rm -rf /usr/share/bharat-browser/__pycache__; fi
 
 %changelog
+* Tue Oct 06 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.14-1
+- Address bar: typing replaces the address instead of mixing into it
 * Tue Oct 06 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.13-1
 - Password prompts use the right site for background tabs; a frozen page no longer stops tab sleeping
 * Tue Oct 06 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.12-1
