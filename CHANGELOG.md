@@ -3,6 +3,15 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.5.15] - 2026-10-06
+
+### Changed
+- **The padlock now shows what was actually checked.** It used to turn green whenever the address started with `https://`. Now it asks the browser engine about the connection itself: green only when the site's certificate was verified, amber when part of the page (an image, a script) came over plain, unencrypted HTTP, and red for plain HTTP or a certificate with problems. It stays grey for the moment a page is still connecting.
+- **See a site's certificate.** Click the padlock to see who the certificate was issued to, who issued it, the dates it's valid, and its SHA-256 fingerprint, which you can select and copy.
+
+### Fixed
+- **The certificate check now has automated tests.** Sites with an invalid certificate were already blocked with no way to click past, but nothing tested it. The tests use a local HTTPS server with an untrusted certificate and check that the page is blocked, that nothing is sent to the site, and that the padlock never shows green.
+
 ## [1.5.14] - 2026-10-06
 
 ### Fixed
