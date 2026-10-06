@@ -66,6 +66,8 @@ python3 -m py_compile /usr/share/bharat-browser/bharat_browser.py >/dev/null 2>&
 if [ \$1 -eq 0 ]; then rm -rf /usr/share/bharat-browser/__pycache__; fi
 
 %changelog
+* Tue Oct 06 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.11-1
+- Address bar and window title show the tab you clicked
 * Tue Oct 06 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.10-1
 - Clear history on close now also clears cookies, so you're signed out of sites
 * Tue Oct 06 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.9-1

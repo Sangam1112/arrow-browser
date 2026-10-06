@@ -3,6 +3,11 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.5.11] - 2026-10-06
+
+### Fixed
+- **Clicking a tab showed the address of the tab you just left.** The address bar, the lock icon and the window title (what your taskbar shows) all showed the previous tab's address and title, until that page changed address or finished loading. The browser asked for "the current tab" a moment before the tab bar had switched, so it got the old tab back. It now uses the tab you clicked.
+
 ## [1.5.10] - 2026-10-06
 
 ### Fixed
