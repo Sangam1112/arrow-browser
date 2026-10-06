@@ -293,6 +293,32 @@ class WindowFeatureTests(unittest.TestCase):
         self.assertEqual(win.url_entry.get_text(), "half-typed")
         wv.grab_focus()
 
+    def test_address_bar_keeps_what_you_type_when_the_page_finishes_loading(self):
+        win = self.win
+        wv = self.load("/blank")
+        win.url_entry.grab_focus()
+        win.url_entry.set_text("half-typed")
+        finished = []
+        handler = wv.connect("load-changed", lambda v, e: e == WebKit2.LoadEvent.FINISHED and finished.append(1))
+        self.addCleanup(wv.disconnect, handler)
+        wv.reload()
+        self.assertTrue(spin(lambda: finished, 5))
+        self.assertEqual(win.url_entry.get_text(), "half-typed")
+        wv.grab_focus()
+
+    def test_first_click_in_address_bar_selects_the_address(self):
+        win = self.win
+        self.load("/blank")
+        win.get_active_webview().grab_focus()
+        ev = Gdk.EventButton()
+        ev.type = Gdk.EventType.BUTTON_PRESS
+        ev.button = 1
+        self.assertTrue(win.on_url_entry_button_press(win.url_entry, ev), "GTK doesn't move the cursor to the click")
+        text = win.url_entry.get_text()
+        self.assertTrue(text)
+        self.assertEqual(win.url_entry.get_selection_bounds(), (0, len(text)), "typing replaces the whole address")
+        win.get_active_webview().grab_focus()
+
     def test_enter_in_address_bar_hands_focus_to_the_page(self):
         win = self.win
         win.url_entry.grab_focus()

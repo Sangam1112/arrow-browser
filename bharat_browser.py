@@ -2477,6 +2477,7 @@ class BharatBrowserWindow(Gtk.Window):
         self.url_entry.connect("activate", self.on_url_activate)
         self.url_entry.connect("changed", self.on_url_entry_changed)
         self.url_entry.connect("icon-press", self.on_url_entry_icon_press)
+        self.url_entry.connect("button-press-event", self.on_url_entry_button_press)
         top_bar.pack_start(self.url_entry, True, True, 4)
 
         # Autocomplete from browsing history (url, title)
@@ -4918,6 +4919,15 @@ class BharatBrowserWindow(Gtk.Window):
         if parsed.scheme in ("http", "https") and parsed.hostname:
             self._prefetch_dns(parsed.hostname)
 
+    def on_url_entry_button_press(self, entry, event):
+        """The first click into the address bar selects the whole address, as in other browsers. GTK would put
+        the cursor where you clicked, so what you typed got mixed into the old address and Enter reloaded it."""
+        if event.button == 1 and event.type == Gdk.EventType.BUTTON_PRESS and not entry.has_focus():
+            entry.grab_focus()
+            entry.select_region(0, -1)
+            return True
+        return False
+
     def on_url_entry_changed(self, entry):
         # Private windows never resolve half-typed text: it would leak
         # keystrokes to the DNS resolver for pages never visited.
@@ -5225,7 +5235,8 @@ class BharatBrowserWindow(Gtk.Window):
 
             active_wv = self.get_active_webview()
             if active_wv == webview:
-                self.url_entry.set_text(uri)
+                if not self.url_entry.has_focus():  # don't wipe out what the user is typing
+                    self.url_entry.set_text(uri)
                 self.update_security_icon(uri)
                 self.statusbar.push(self.context_id, f"Ready | {uri}")
 
