@@ -3,6 +3,11 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.5.12] - 2026-10-06
+
+### Fixed
+- **Links that open a new tab took 15 seconds, and the page you clicked on went blank.** With "Use hardware acceleration" off, WebKitGTK 2.52 stalls for 15 seconds whenever a page opens a new tab (links that open in a new tab, `window.open()` pop-ups such as sign-in windows). The new tab stayed empty and the original page stopped drawing until then. Tabs opened this way now allow hardware acceleration for themselves only; pages in them are still drawn by the CPU, the same as fullscreen video. All other tabs stay fully GPU-off. New tabs now open in under half a second. Computers using the old `radeon` driver weren't affected and are unchanged.
+
 ## [1.5.11] - 2026-10-06
 
 ### Fixed
