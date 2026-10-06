@@ -7,6 +7,8 @@ import importlib.util
 import json
 import os
 import shutil
+import ssl
+import subprocess
 import tempfile
 import threading
 import time
@@ -23,7 +25,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 spec = importlib.util.spec_from_file_location("bb_window", os.path.join(ROOT, "bharat_browser.py"))
 bb = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bb)
-from gi.repository import Gdk, GLib, Gtk, WebKit2  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, Gtk, WebKit2  # noqa: E402
 
 HAVE_DISPLAY = Gtk.init_check()[0] if isinstance(Gtk.init_check(), tuple) else bool(Gtk.init_check())
 
@@ -98,6 +100,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class TLSServer(http.server.ThreadingHTTPServer):
+    """HTTPS test server. The TLS handshake runs in each connection's own thread: done in the accept loop,
+    one connection that never finishes its handshake would stall every other one."""
+    tls = None
+
+    def finish_request(self, request, client_address):
+        try:
+            request = self.tls.wrap_socket(request, server_side=True)
+        except (ssl.SSLError, OSError):
+            return  # the browser rejected the certificate
+        super().finish_request(request, client_address)
+
+
 def spin(condition, timeout=10.0):
     end = time.time() + timeout
     while time.time() < end:
@@ -155,6 +170,19 @@ class WindowFeatureTests(unittest.TestCase):
         cls.port = cls.server.server_port
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
         cls.base = f"http://127.0.0.1:{cls.port}"
+        # HTTPS with a self-signed certificate, which no system trusts
+        cls.cert_file, key_file = os.path.join(_HOME, "test-cert.pem"), os.path.join(_HOME, "test-key.pem")
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "30",
+                        "-keyout", key_file, "-out", cls.cert_file,
+                        "-subj", "/O=Bharat Test Issuer/CN=bharat-test.example",
+                        "-addext", "subjectAltName=IP:127.0.0.1,IP:127.0.0.2"], check=True, capture_output=True)
+        TLSServer.tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        TLSServer.tls.load_cert_chain(cls.cert_file, key_file)
+        cls.tls_servers = {}
+        for address in ("127.0.0.1", "127.0.0.2"):
+            server = TLSServer((address, 0), Handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            cls.tls_servers[address] = server
         os.makedirs(bb.CONFIG_DIR, exist_ok=True)
         with open(bb.CONFIG_FILE, "w") as f:
             json.dump({"homepage": cls.base + "/blank", "open_homepage_on_startup": True,
@@ -174,6 +202,8 @@ class WindowFeatureTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.win.destroy()
         cls.server.shutdown()
+        for server in cls.tls_servers.values():
+            server.shutdown()
         shutil.rmtree(_HOME, ignore_errors=True)
 
     def setUp(self):
@@ -900,10 +930,69 @@ class WindowFeatureTests(unittest.TestCase):
 
     def test_lock_colour_follows_the_connection(self):
         win, style = self.win, self.win.url_entry.get_style_context()
-        for uri, secure, insecure in (("https://x.example/", True, False), ("http://x.example/", False, True),
-                                      ("about:blank", False, False)):
-            win.update_security_icon(uri)
-            self.assertEqual((style.has_class("url-secure"), style.has_class("url-insecure")), (secure, insecure), uri)
+        cert = Gio.TlsCertificate.new_from_file(self.cert_file)
+
+        class Page:
+            def __init__(self, tls, mixed=False, committed=True):
+                self.tls, self._bharat_mixed_content, self._bharat_committed = tls, mixed, committed
+
+            def get_tls_info(self):
+                return self.tls
+
+        verified, bad = (True, cert, Gio.TlsCertificateFlags(0)), (True, cert, Gio.TlsCertificateFlags.UNKNOWN_CA)
+        for uri, page, expected in (
+                ("https://x.example/", Page(verified), "url-secure"),
+                ("https://x.example/", Page(verified, mixed=True), "url-mixed"),
+                ("https://x.example/", Page(bad), "url-insecure"),
+                ("https://x.example/", Page(verified, committed=False), None),  # still connecting
+                ("https://x.example/", None, None),  # the address alone proves nothing
+                ("http://x.example/", Page((False, None, 0)), "url-insecure"),
+                ("about:blank", Page((False, None, 0)), None)):
+            win.update_security_icon(uri, page)
+            shown = [c for c in ("url-secure", "url-mixed", "url-insecure") if style.has_class(c)]
+            self.assertEqual(shown, [expected] if expected else [], (uri, page and page.__dict__))
+
+    def test_invalid_certificate_is_blocked_without_a_bypass(self):
+        # In its own tab: a tab left showing a browser-made page freezes when later tests switch GPU modes
+        # (a WebKitGTK problem with any load_html() page, not specific to this one).
+        self.addCleanup(self.close_new_tabs, self.win._tab_boxes())
+        url = f"https://127.0.0.1:{self.tls_servers['127.0.0.1'].server_port}/done"
+        self.win.create_new_tab(url)
+        tab = self.win._tab_boxes()[-1]
+        self.win.notebook.set_current_page(self.win.notebook.page_num(tab))
+        wv = tab._bharat_webview
+        self.assertTrue(spin(lambda: "not private" in (js(wv, "document.body ? document.body.innerText : ''") or ""), 10))
+        self.assertNotIn("/done", Handler.requests, "the request never reached the site")
+        self.assertEqual(wv.get_uri(), url)
+        self.assertIn("bypass", js(wv, "document.body.innerText"))
+        self.assertFalse(self.win.url_entry.get_style_context().has_class("url-secure"))
+
+    def test_lock_reads_the_real_connection(self):
+        # Trusting the test certificate for 127.0.0.2 only (127.0.0.1 stays blocked for the test above):
+        # WebKit then loads the page but still reports the certificate's errors, and the lock must show them.
+        self.win.context.allow_tls_certificate_for_host(Gio.TlsCertificate.new_from_file(self.cert_file), "127.0.0.2")
+        self.addCleanup(self.close_new_tabs, self.win._tab_boxes())
+        self.win.create_new_tab(f"https://127.0.0.2:{self.tls_servers['127.0.0.2'].server_port}/done")
+        tab = self.win._tab_boxes()[-1]
+        self.win.notebook.set_current_page(self.win.notebook.page_num(tab))
+        wv = tab._bharat_webview
+        self.assertTrue(spin(lambda: not wv.is_loading() and wv.get_title() == "done", 10), wv.get_uri())
+        state, cert = self.win.connection_security(wv, wv.get_uri())
+        self.assertEqual(state, "bad-cert")
+        self.assertEqual(bb.certificate_summary(cert)["issued_to"], "bharat-test.example")
+        self.assertTrue(self.win.url_entry.get_style_context().has_class("url-insecure"))
+        self.assertIn("certificate has problems", self.win.url_entry.get_icon_tooltip_text(Gtk.EntryIconPosition.PRIMARY))
+        markup = self.win.site_security_markup(wv, wv.get_uri(), "127.0.0.2")
+        self.assertIn("Issued by: Bharat Test Issuer", markup)
+
+    def test_certificate_details(self):
+        c = bb.certificate_summary(Gio.TlsCertificate.new_from_file(self.cert_file))
+        der = ssl.PEM_cert_to_DER_cert(open(self.cert_file).read())
+        import hashlib
+        self.assertEqual(c["sha256"].replace(":", ""), hashlib.sha256(der).hexdigest().upper())
+        self.assertEqual((c["issued_to"], c["issued_by"]), ("bharat-test.example", "Bharat Test Issuer"))
+        self.assertRegex(c["valid_until"], r"^\d{1,2} [A-Z][a-z]{2} \d{4}$")
+        self.assertEqual(bb.dn_field(r"C=US,O=Acme\, Inc.,CN=R3", "O"), "Acme, Inc.")
 
     def test_about_page_links_to_the_project_page(self):
         dialog = self.win.build_settings_dialog("about")

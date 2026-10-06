@@ -1096,6 +1096,34 @@ def site_host_of(uri):
         return ""
 
 
+def dn_field(dn, key):
+    """One field (CN, O, ...) of a certificate name such as "C=US,O=Google Trust Services,CN=WR2"."""
+    for name, value in re.findall(r'(?:^|,)\s*([A-Za-z0-9.]+)=((?:\\.|[^,\\])*)', dn or ""):
+        if name.upper() == key:
+            return re.sub(r'\\(.)', r'\1', value).strip()
+    return ""
+
+
+def certificate_summary(cert):
+    """What the address bar's site panel shows about a site's certificate."""
+    subject, issuer = cert.props.subject_name or "", cert.props.issuer_name or ""
+    # Not cert.props.dns_names: PyGObject mis-counts references in that GBytes array (GLib refcount warning).
+    issued_to = dn_field(subject, "CN") or subject
+    der = cert.props.certificate
+    fingerprint = hashlib.sha256(bytes(der)).hexdigest().upper() if der is not None else ""
+
+    def day(when):
+        return when.format("%-d %b %Y") if when is not None else "unknown"
+
+    return {
+        "issued_to": issued_to,
+        "issued_by": dn_field(issuer, "O") or dn_field(issuer, "CN") or issuer,
+        "valid_from": day(cert.props.not_valid_before),
+        "valid_until": day(cert.props.not_valid_after),
+        "sha256": ":".join(fingerprint[i:i + 2] for i in range(0, len(fingerprint), 2)),
+    }
+
+
 def set_site_value(settings, host, key, value, sub=None):
     """Set (or, when value is None, clear) a per-site value; drops empty entries."""
     if not host:
@@ -3017,6 +3045,7 @@ class BharatBrowserWindow(Gtk.Window):
         entry.url-entry image { color: #6b7686; margin-right: 2px; }
         entry.url-entry.url-secure image.left { color: #22c55e; }
         entry.url-entry.url-insecure image.left { color: #ef4444; }
+        entry.url-entry.url-mixed image.left { color: #f59e0b; }
         entry.url-entry:focus {
             background-color: rgba(255, 255, 255, 0.07);
             border-color: #6366f1;
@@ -3411,6 +3440,7 @@ class BharatBrowserWindow(Gtk.Window):
         sig_ids.append((webview, webview.connect("web-process-terminated", self.on_web_process_terminated)))
         sig_ids.append((webview, webview.connect("permission-request", self.on_permission_request)))
         sig_ids.append((webview, webview.connect("load-failed-with-tls-errors", self.on_load_failed_with_tls_errors)))
+        sig_ids.append((webview, webview.connect("insecure-content-detected", self.on_insecure_content_detected)))
         sig_ids.append((webview, webview.connect("load-failed", self.on_load_failed)))
         # Files WebKit can't render inline (Office docs, zip archives, etc.)
         # would otherwise just interrupt the frame load and surface as a
@@ -3791,7 +3821,7 @@ class BharatBrowserWindow(Gtk.Window):
             uri = webview.get_uri() or ""
             title = webview.get_title() or f"Bharat Browser v{self.current_version}"
             self.url_entry.set_text(uri)
-            self.update_security_icon(uri)
+            self.update_security_icon(uri, webview)
             self.set_title(f"{title} - Bharat Browser v{self.current_version}")
             self.statusbar.push(self.context_id, f"Ready | {uri}")
 
@@ -3938,23 +3968,53 @@ class BharatBrowserWindow(Gtk.Window):
         if tab_box is self._current_active_tab_box:
             self._reactivate_tab(tab_box)
 
-    def update_security_icon(self, uri):
-        """The lock in the address bar: green for HTTPS, red for plain HTTP, a grey search icon otherwise."""
+    # Address-bar lock for each connection_security() state: icon, colour class, tooltip.
+    SECURITY_ICONS = {
+        "secure": ("channel-secure-symbolic", "url-secure", "Secure connection (HTTPS, certificate verified)"),
+        "mixed": ("channel-insecure-symbolic", "url-mixed", "Partly secure: some content on this page came over plain HTTP"),
+        "bad-cert": ("channel-insecure-symbolic", "url-insecure", "Not secure: the site's certificate has problems"),
+        "http": ("channel-insecure-symbolic", "url-insecure", "Not secure (HTTP)"),
+        "checking": ("channel-secure-symbolic", None, "Checking the connection..."),
+        "none": ("edit-find-symbolic", None, ""),
+    }
+
+    def connection_security(self, webview, uri):
+        """How the page in webview arrived, as (state, certificate). Asks WebKit about the actual connection rather
+        than trusting the address: "secure" (certificate verified, nothing loaded over plain HTTP), "mixed" (some
+        content came over plain HTTP), "bad-cert" (certificate with errors), "http", "checking" (HTTPS page still
+        connecting) or "none" (not a web page, or a page the browser made itself, such as an error page)."""
+        if uri.startswith("http://"):
+            return "http", None
+        if not uri.startswith("https://") or webview is None:
+            return "none", None
+        if not getattr(webview, "_bharat_committed", True):
+            return "checking", None
+        ok, cert, errors = webview.get_tls_info()
+        if not ok or cert is None:
+            return "none", None
+        if errors:
+            return "bad-cert", cert
+        if getattr(webview, "_bharat_mixed_content", False):
+            return "mixed", cert
+        return "secure", cert
+
+    def update_security_icon(self, uri, webview=None):
+        """The lock in the address bar: green when the certificate was verified, amber when part of the page came
+        over plain HTTP, red for plain HTTP or a bad certificate, a grey search icon otherwise."""
         style = self.url_entry.get_style_context()
-        style.remove_class("url-secure")
-        style.remove_class("url-insecure")
-        if uri.startswith("https://"):
-            self.url_entry.set_icon_from_icon_name(Gtk.EntryIconPosition.PRIMARY, "channel-secure-symbolic")
-            self.url_entry.set_icon_tooltip_text(Gtk.EntryIconPosition.PRIMARY, "Secure connection (HTTPS)")
-            style.add_class("url-secure")
-        elif uri.startswith("http://"):
-            self.url_entry.set_icon_from_icon_name(Gtk.EntryIconPosition.PRIMARY, "channel-insecure-symbolic")
-            self.url_entry.set_icon_tooltip_text(Gtk.EntryIconPosition.PRIMARY, "Not secure (HTTP)")
-            style.add_class("url-insecure")
-        else:
-            self.url_entry.set_icon_from_icon_name(Gtk.EntryIconPosition.PRIMARY, "edit-find-symbolic")
-            self.url_entry.set_icon_tooltip_text(Gtk.EntryIconPosition.PRIMARY, "")
+        for cls in ("url-secure", "url-insecure", "url-mixed"):
+            style.remove_class(cls)
+        icon, cls, tooltip = self.SECURITY_ICONS[self.connection_security(webview, uri)[0]]
+        self.url_entry.set_icon_from_icon_name(Gtk.EntryIconPosition.PRIMARY, icon)
+        self.url_entry.set_icon_tooltip_text(Gtk.EntryIconPosition.PRIMARY, tooltip)
+        if cls:
+            style.add_class(cls)
         self.update_bookmark_star(uri)
+
+    def on_insecure_content_detected(self, webview, event):
+        webview._bharat_mixed_content = True
+        if webview is self.get_active_webview():
+            self.update_security_icon(webview.get_uri() or "", webview)
 
     # Bookmarks
     @staticmethod
@@ -5206,7 +5266,7 @@ class BharatBrowserWindow(Gtk.Window):
             return
         uri = webview.get_uri() or ""
         self.url_entry.set_text(uri)
-        self.update_security_icon(uri)
+        self.update_security_icon(uri, webview)
 
     def on_load_changed(self, webview, load_event):
         if load_event in (WebKit2.LoadEvent.STARTED, WebKit2.LoadEvent.REDIRECTED):
@@ -5217,8 +5277,14 @@ class BharatBrowserWindow(Gtk.Window):
         if load_event == WebKit2.LoadEvent.STARTED:
             self._fill_offered = {k for k in self._fill_offered if k[0] != id(webview)}
             webview._bharat_pending_fill = None
+            # Until the new page commits, get_tls_info() still describes the previous one.
+            webview._bharat_committed = False
+            webview._bharat_mixed_content = False
         elif load_event == WebKit2.LoadEvent.COMMITTED:
+            webview._bharat_committed = True
             self._apply_saved_zoom(webview)
+            if webview is self.get_active_webview():
+                self.update_security_icon(webview.get_uri() or "", webview)
         if load_event == WebKit2.LoadEvent.STARTED:
             self.statusbar.push(self.context_id, "Loading webpage...")
         elif load_event == WebKit2.LoadEvent.FINISHED:
@@ -5237,7 +5303,7 @@ class BharatBrowserWindow(Gtk.Window):
             if active_wv == webview:
                 if not self.url_entry.has_focus():  # don't wipe out what the user is typing
                     self.url_entry.set_text(uri)
-                self.update_security_icon(uri)
+                self.update_security_icon(uri, webview)
                 self.statusbar.push(self.context_id, f"Ready | {uri}")
 
             # get_title() is often still empty at this exact instant — WebKit
@@ -6466,6 +6532,29 @@ td.c{{text-align:right;color:#cbd5e1;width:70px}}td.b{{width:30%}}td.b span{{dis
         box.show_all()
         popover.popup()
 
+    SECURITY_HEADLINES = {
+        "secure": "🔒 Secure connection (HTTPS)",
+        "mixed": "⚠️ Partly secure: some content on this page came over plain HTTP",
+        "bad-cert": "⚠️ Not secure: the site's certificate has problems",
+        "http": "⚠️ Not secure (HTTP)",
+        "checking": "Checking the connection...",
+        "none": "",
+    }
+
+    def site_security_markup(self, webview, uri, host):
+        """The top of the site panel: the site, how it's connected and, for HTTPS, its certificate."""
+        state, cert = self.connection_security(webview, uri)
+        esc = GLib.markup_escape_text
+        markup = f"<b>{esc(host)}</b>"
+        if self.SECURITY_HEADLINES[state]:
+            markup += f"\n<small>{esc(self.SECURITY_HEADLINES[state])}</small>"
+        if cert is not None:
+            c = certificate_summary(cert)
+            markup += (f"\n\n<small><b>Certificate</b>\nIssued to: {esc(c['issued_to'])}\nIssued by: {esc(c['issued_by'])}"
+                       f"\nValid: {esc(c['valid_from'])} to {esc(c['valid_until'])}"
+                       f"\nSHA-256: <tt>{esc(c['sha256'][:47])}\n{esc(c['sha256'][48:])}</tt></small>")
+        return markup
+
     def show_site_popover(self):
         webview = self.get_active_webview()
         uri = (webview.get_uri() or "") if webview else ""
@@ -6480,10 +6569,9 @@ td.c{{text-align:right;color:#cbd5e1;width:70px}}td.b{{width:30%}}td.b span{{dis
         for setter in (box.set_margin_start, box.set_margin_end, box.set_margin_top, box.set_margin_bottom):
             setter(14)
 
-        secure = uri.startswith("https://")
         head = Gtk.Label(xalign=0.0)
-        head.set_markup(f"<b>{GLib.markup_escape_text(host)}</b>\n<small>"
-                        + ("🔒 Secure connection (HTTPS)" if secure else "⚠️ Not secure (HTTP)") + "</small>")
+        head.set_selectable(True)  # so the fingerprint can be copied
+        head.set_markup(self.site_security_markup(webview, uri, host))
         box.pack_start(head, False, False, 0)
         box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 2)
         entry = self.site_settings.get(host, {})
