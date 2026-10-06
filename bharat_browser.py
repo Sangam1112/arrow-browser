@@ -814,6 +814,61 @@ def save_url_history(entries):
     except Exception as e:
         print("History save note:", e)
 
+# Present while a normal window runs with "Clear history, cookies and site data
+# when closing" on; holds that process's PID. Removed once the exit clear has
+# finished, so finding it with a dead PID means the browser crashed or was killed
+# before it could sign the user out.
+CLEAR_ON_EXIT_MARKER = os.path.join(CONFIG_DIR, "clear-on-exit.pending")
+COOKIE_DB_FILE = os.path.join(CONFIG_DIR, "cookies.sqlite")
+
+def _marker_owner_alive(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            pid = int(f.read().strip())
+    except (OSError, ValueError):
+        return False
+    if pid == os.getpid():
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        pass
+    return True
+
+def mark_clear_on_exit_pending():
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(CLEAR_ON_EXIT_MARKER, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+    except OSError as e:
+        print("Clear-on-exit marker note:", e)
+
+def unmark_clear_on_exit_pending():
+    try:
+        os.remove(CLEAR_ON_EXIT_MARKER)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        print("Clear-on-exit marker note:", e)
+
+def clear_cookies_left_by_crash():
+    """Delete the cookie database if the last session should have cleared it on
+    exit but never got the chance. Must run before WebKit opens the database.
+    Leaves it alone while another running Bharat Browser still owns it."""
+    if not os.path.exists(CLEAR_ON_EXIT_MARKER) or _marker_owner_alive(CLEAR_ON_EXIT_MARKER):
+        return False
+    for suffix in ("", "-journal", "-wal", "-shm"):
+        try:
+            os.remove(COOKIE_DB_FILE + suffix)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            print("Cookie cleanup note:", e)
+    unmark_clear_on_exit_pending()
+    return True
+
 def load_bookmarks():
     """Returns a list of {"url":..., "title":..., "added": epoch} dicts in the
     order they were added. Never called for private windows, matching the
@@ -2291,11 +2346,14 @@ class BharatBrowserWindow(Gtk.Window):
         # restart. Persist them for normal windows (private windows use the
         # ephemeral manager above and must stay in memory), and block
         # third-party cookies plus enable Intelligent Tracking Prevention.
+        if not self.is_private and self.clear_history_on_exit:
+            clear_cookies_left_by_crash()
+            mark_clear_on_exit_pending()
         try:
             cookie_mgr = self.context.get_cookie_manager()
             if not self.is_private:
                 cookie_mgr.set_persistent_storage(
-                    os.path.join(CONFIG_DIR, "cookies.sqlite"),
+                    COOKIE_DB_FILE,
                     WebKit2.CookiePersistentStorage.SQLITE
                 )
             cookie_mgr.set_accept_policy(WebKit2.CookieAcceptPolicy.NO_THIRD_PARTY)
@@ -3560,7 +3618,8 @@ class BharatBrowserWindow(Gtk.Window):
             if hasattr(tab_box, '_bharat_webview'):
                 self._flush_page_view(tab_box._bharat_webview)
 
-        if not self.is_private and self.clear_history_on_exit:
+        clearing = not self.is_private and self.clear_history_on_exit
+        if clearing:
             self.url_history = []
             if self._history_save_source is not None:
                 GLib.source_remove(self._history_save_source)
@@ -3573,6 +3632,45 @@ class BharatBrowserWindow(Gtk.Window):
         if not self.is_private:
             save_privacy_stats(self.stats)
 
+        if clearing:
+            # Cookies and site storage too, or sites like Google stay signed in.
+            # Keep the main loop alive until WebKit has written the empty cookie
+            # database; quitting straight away would kill the network process first.
+            self._clear_website_data(self._release_window)
+        else:
+            self._release_window()
+
+    def _clear_website_data(self, on_done, timeout_seconds=5):
+        finished = []
+
+        def finish(*_args):
+            if finished:
+                return False
+            finished.append(True)
+            if ok:
+                unmark_clear_on_exit_pending()
+            on_done()
+            return False
+
+        def on_cleared(mgr, result, _data=None):
+            try:
+                mgr.clear_finish(result)
+                ok.append(True)
+            except Exception as e:
+                print("Clear-on-exit note:", e)
+            finish()
+
+        ok = []
+        try:
+            wdm = self.context.get_website_data_manager()
+            wdm.clear(WebKit2.WebsiteDataTypes.ALL, 0, None, on_cleared, None)
+        except Exception as e:
+            print("Clear-on-exit note:", e)
+            finish()
+            return
+        GLib.timeout_add_seconds(timeout_seconds, finish)
+
+    def _release_window(self):
         global _LIVE_WINDOW_COUNT
         _LIVE_WINDOW_COUNT -= 1
         if _LIVE_WINDOW_COUNT <= 0:
@@ -5583,6 +5681,15 @@ class BharatBrowserWindow(Gtk.Window):
         data = add_page("data", "🗂️  History & Data", "History & Data",
                         "Your browsing history, cookies and cached files, and bringing data in from another browser.")
 
+        def _store_clear_on_exit(active):
+            store("clear_history_on_exit")(active)
+            if self.is_private:
+                return
+            if active:
+                mark_clear_on_exit_pending()
+            else:
+                unmark_clear_on_exit_pending()
+
         def _confirm_clear():
             confirm = Gtk.MessageDialog(
                 transient_for=dialog,
@@ -5606,9 +5713,10 @@ class BharatBrowserWindow(Gtk.Window):
 
         self._settings_section(
             data, "HISTORY",
-            switch("clear_history_on_exit", "🧹", "Clear history when closing",
-                   "Erases browsing history and address-bar suggestions each time you quit.",
-                   store("clear_history_on_exit")),
+            switch("clear_history_on_exit", "🧹", "Clear history and cookies when closing",
+                   "Erases browsing history, cookies and site data each time you quit, "
+                   "so you're signed out of sites. Bookmarks and saved passwords are kept.",
+                   _store_clear_on_exit),
             self._settings_button_row("🕘", "Browsing history", "Search and revisit pages you've opened (Ctrl+H).",
                                       "Open", lambda: close_then(self.open_history_tab)),
         )

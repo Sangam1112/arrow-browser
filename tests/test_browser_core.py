@@ -242,6 +242,42 @@ class ImportTests(TmpDirCase):
         self.assertEqual(added, 1)
 
 
+class ClearOnExitCrashTests(TmpDirCase):
+    def setUp(self):
+        super().setUp()
+        for name, value in (("CLEAR_ON_EXIT_MARKER", os.path.join(self.tmp, "clear-on-exit.pending")),
+                            ("COOKIE_DB_FILE", os.path.join(self.tmp, "cookies.sqlite"))):
+            self.addCleanup(setattr, bb, name, getattr(bb, name))
+            setattr(bb, name, value)
+        write_text(bb.COOKIE_DB_FILE, "x")
+        write_text(bb.COOKIE_DB_FILE + "-journal", "x")
+
+    def test_crashed_session_loses_its_cookies(self):
+        dead = 2 ** 22 + 12345  # above pid_max's usual default, so never running
+        write_text(bb.CLEAR_ON_EXIT_MARKER, str(dead))
+        self.assertTrue(bb.clear_cookies_left_by_crash())
+        self.assertFalse(os.path.exists(bb.COOKIE_DB_FILE))
+        self.assertFalse(os.path.exists(bb.COOKIE_DB_FILE + "-journal"))
+        self.assertFalse(os.path.exists(bb.CLEAR_ON_EXIT_MARKER))
+
+    def test_running_browser_keeps_its_cookies(self):
+        write_text(bb.CLEAR_ON_EXIT_MARKER, str(os.getppid()))
+        self.assertFalse(bb.clear_cookies_left_by_crash())
+        self.assertTrue(os.path.exists(bb.COOKIE_DB_FILE))
+
+    def test_clean_exit_keeps_cookies(self):
+        self.assertFalse(bb.clear_cookies_left_by_crash())
+        self.assertTrue(os.path.exists(bb.COOKIE_DB_FILE))
+
+    def test_marker_round_trip(self):
+        bb.mark_clear_on_exit_pending()
+        with open(bb.CLEAR_ON_EXIT_MARKER) as f:
+            self.assertEqual(f.read(), str(os.getpid()))
+        bb.unmark_clear_on_exit_pending()
+        self.assertFalse(os.path.exists(bb.CLEAR_ON_EXIT_MARKER))
+        bb.unmark_clear_on_exit_pending()  # already gone: no error
+
+
 class SiteSettingsTests(TmpDirCase):
     def test_set_get_and_cleanup(self):
         s = {}

@@ -706,6 +706,29 @@ class WindowFeatureTests(unittest.TestCase):
             self.assertIn("https://imp.example/", [b["url"] for b in json.load(f)])
         self.assertIn("https://imp.example/h", [row[0] for row in self.win.url_completion_store])
 
+    def test_clear_on_exit_removes_cookies(self):
+        wv = self.load("/blank", "blank")
+        uri = self.base + "/blank"
+        wv.run_javascript("document.cookie = 'sid=signed-in; max-age=3600'", None, None, None)
+        cookie_mgr = self.win.context.get_cookie_manager()
+
+        def cookie_names():
+            out = []
+            cookie_mgr.get_cookies(uri, None, lambda m, r, _d: out.append(
+                [c.get_name() for c in m.get_cookies_finish(r)]), None)
+            spin(lambda: out, 5)
+            return out[0] if out else None
+
+        self.assertTrue(spin(lambda: "sid" in (cookie_names() or []), 5), "test cookie was never set")
+        bb.mark_clear_on_exit_pending()
+        done = []
+        self.win._clear_website_data(lambda: done.append(True))
+        self.assertTrue(spin(lambda: done, 10), "clear never finished")
+        self.assertEqual(cookie_names(), [], "cookies survive the exit clear")
+        self.assertFalse(os.path.exists(bb.CLEAR_ON_EXIT_MARKER), "marker kept after a successful clear")
+        spin(lambda: False, 0.3)
+        self.assertEqual(done, [True], "on_done ran more than once")
+
     def test_settings_dialog_pages_and_switches(self):
         dialog = self.win.build_settings_dialog("privacy")
         try:
@@ -723,7 +746,9 @@ class WindowFeatureTests(unittest.TestCase):
             self.assertEqual(self.win.clear_history_on_exit, sw.get_active())
             with open(bb.CONFIG_FILE) as f:
                 self.assertEqual(json.load(f)["clear_history_on_exit"], sw.get_active(), "saved to disk")
+            self.assertEqual(os.path.exists(bb.CLEAR_ON_EXIT_MARKER), sw.get_active(), "crash marker follows the switch")
             sw.set_active(not sw.get_active())
+            self.assertEqual(os.path.exists(bb.CLEAR_ON_EXIT_MARKER), sw.get_active())
 
             dark = controls["dark_mode_active"]
             dark.set_active(not dark.get_active())
