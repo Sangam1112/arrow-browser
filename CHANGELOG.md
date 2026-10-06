@@ -3,6 +3,11 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.5.10] - 2026-10-06
+
+### Fixed
+- **"Clear history when closing" left you signed in to sites.** The setting only emptied the browsing history and address-bar suggestions. Cookies stayed on disk, so after a restart Google and other sites still knew who you were. Closing the browser now also clears cookies, cached files and site storage, the same as "Clear history, cookies and cache", and waits for that to finish before quitting. If the browser crashes or is killed before it can clear, the leftover cookies are deleted the next time it starts. Bookmarks and saved passwords are kept. The setting is renamed "Clear history and cookies when closing" to say what it does.
+
 ## [1.5.9] - 2026-10-06
 
 ### Fixed
