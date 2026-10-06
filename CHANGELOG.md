@@ -3,6 +3,12 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.5.13] - 2026-10-06
+
+### Fixed
+- **Saved-password prompts could name the wrong site.** The browser took the site from the tab you were looking at, not from the tab where the login happened. A login form loading in a background tab was offered a fill for the site in front, and a login submitted in a background tab was offered for saving under the site in front. Each prompt now belongs to the tab its login form is in. For a login page in a background tab, the "Fill" offer appears when you switch to that tab.
+- **One frozen page could stop tabs from going to sleep for the rest of the session.** When memory runs low, background tabs sleep one at a time, and each page is first asked whether you've typed something you haven't sent. A page stuck in a script never answered, so automatic sleeping stopped until you restarted the browser. A page that doesn't answer within 3 seconds is now left awake, and the browser moves on to the next tab.
+
 ## [1.5.12] - 2026-10-06
 
 ### Fixed
