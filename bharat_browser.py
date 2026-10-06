@@ -3379,7 +3379,9 @@ class BharatBrowserWindow(Gtk.Window):
         load_initial_uri = webview is None
         if webview is None:
             webview = WebKit2.WebView.new_with_context(self.context)
-        webview.set_settings(self.web_settings)
+        webview._bharat_accelerated = not load_initial_uri and self._popup_needs_acceleration()
+        webview.set_settings(self._site_settings_variant(False, False, accelerated=True)
+                             if webview._bharat_accelerated else self.web_settings)
 
         # Inject UserScripts
         ucm = webview.get_user_content_manager()
@@ -3501,6 +3503,15 @@ class BharatBrowserWindow(Gtk.Window):
         active = self.get_active_tab_box()
         if activate and active is not None and id(active) in self._suspended_session_states:
             self._reactivate_tab(active)
+
+    def _popup_needs_acceleration(self):
+        """WebKitGTK 2.52 stalls for 15 seconds when a page opens a tab (target="_blank", window.open) under
+        HardwareAccelerationPolicy.NEVER: the new tab stays empty and the opener, which shares its renderer, stops
+        painting. Such a tab therefore keeps the policy lifted for its whole life (pages still paint on the CPU);
+        switching it back to NEVER later stalls their shared renderer the same way. Not needed when compositing is
+        disabled (radeon), where the stall doesn't happen."""
+        return not _DRIVER_UNSTABLE and not _wants_accelerated_policy(self.gpu_acceleration_enabled, self._fullscreen,
+                                                                      _DRIVER_UNSTABLE)
 
     def _apply_hardware_acceleration_policy(self):
         self.web_settings.set_hardware_acceleration_policy(
@@ -5908,8 +5919,9 @@ class BharatBrowserWindow(Gtk.Window):
     def _site_wants_filter(self, host):
         return self.adblock_enabled and self.site_settings.get(host, {}).get("adblock") is not False
 
-    def _site_settings_variant(self, js_off, chrome_ua):
-        """A copy of the window's WebKit settings with this site's choices: JavaScript off and/or the Chrome UA."""
+    def _site_settings_variant(self, js_off, chrome_ua, accelerated=False):
+        """A copy of the window's WebKit settings with this site's choices: JavaScript off and/or the Chrome UA.
+        accelerated=True also lifts HardwareAccelerationPolicy.NEVER (see _popup_needs_acceleration)."""
         clone = WebKit2.Settings()
         for prop in self.web_settings.list_properties():
             # Deprecated properties are skipped: reading them only makes WebKit print a warning.
@@ -5923,6 +5935,8 @@ class BharatBrowserWindow(Gtk.Window):
             clone.set_enable_javascript(False)
         if chrome_ua:
             clone.set_user_agent(CHROME_USER_AGENT)
+        if accelerated:
+            clone.set_hardware_acceleration_policy(WebKit2.HardwareAccelerationPolicy.ALWAYS)
         return clone
 
     def _apply_site_policy(self, webview, host):
@@ -5940,8 +5954,15 @@ class BharatBrowserWindow(Gtk.Window):
             webview._bharat_filter_on = want_filter
         key = (entry.get("javascript") is False, entry.get("chrome_ua") is True)
         if key != getattr(webview, "_bharat_settings_key", (False, False)):
-            webview.set_settings(self._site_settings_variant(*key) if any(key) else self.web_settings)
             webview._bharat_settings_key = key
+            self._apply_view_settings(webview)
+
+    def _apply_view_settings(self, webview):
+        key = getattr(webview, "_bharat_settings_key", (False, False))
+        if getattr(webview, "_bharat_accelerated", False):
+            webview.set_settings(self._site_settings_variant(*key, accelerated=True))
+        else:
+            webview.set_settings(self._site_settings_variant(*key) if any(key) else self.web_settings)
 
     def _remember_zoom(self, webview):
         host = site_host_of(webview.get_uri())

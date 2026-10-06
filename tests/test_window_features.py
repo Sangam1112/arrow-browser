@@ -207,6 +207,40 @@ class WindowFeatureTests(unittest.TestCase):
             for tab in tabs[-2:]:
                 win.close_tab(tab)
 
+    def test_link_opens_new_tab_quickly_with_gpu_off(self):
+        # WebKitGTK 2.52 stalls a new tab opened by a page for 15 s under HardwareAccelerationPolicy.NEVER,
+        # and the opener stops painting meanwhile.
+        win = self.win
+        saved = win.gpu_acceleration_enabled
+        win.gpu_acceleration_enabled = False
+        win._apply_hardware_acceleration_policy()
+        before = win.notebook.get_n_pages()
+        win.create_new_tab(self.base + "/blank")
+        try:
+            opener = win.get_active_webview()
+            opener.load_uri(self.base + "/opener")
+            self.assertTrue(spin(lambda: opener.get_title() == "opener" and not opener.is_loading(), 10))
+            opener.run_javascript("document.getElementById('p').click()", None, None, None)
+            self.assertTrue(spin(lambda: win.notebook.get_n_pages() == before + 2, 3), "no new tab")
+            popup = win.notebook.get_nth_page(win.notebook.get_n_pages() - 1)._bharat_webview
+            started = time.time()
+            self.assertTrue(spin(lambda: popup.get_title() == "done", 10), "new tab never loaded")
+            self.assertLess(time.time() - started, 5, "new tab stalled")
+            answered = []
+            for wv in (opener, popup):
+                wv.run_javascript("1+1", None, lambda v, r, _d: answered.append(v), None)
+            self.assertTrue(spin(lambda: len(answered) == 2, 3), "a tab stopped responding")
+            if not bb._DRIVER_UNSTABLE:
+                self.assertEqual(popup.get_settings().get_hardware_acceleration_policy(),
+                                 WebKit2.HardwareAccelerationPolicy.ALWAYS)
+                self.assertEqual(opener.get_settings().get_hardware_acceleration_policy(),
+                                 WebKit2.HardwareAccelerationPolicy.NEVER, "only the new tab is lifted")
+        finally:
+            for i in reversed(range(before, win.notebook.get_n_pages())):
+                win.close_tab(win.notebook.get_nth_page(i))
+            win.gpu_acceleration_enabled = saved
+            win._apply_hardware_acceleration_policy()
+
     def test_pin_reorder_close_reopen_and_session(self):
         win = self.win
         win.create_new_tab(self.base + "/blank")
