@@ -3768,7 +3768,9 @@ class BharatBrowserWindow(Gtk.Window):
             if id(page) in self._suspended_session_states and not self._restoring_session:
                 self._reactivate_tab(page)
 
-        webview = self.get_active_webview()
+        # Not get_active_webview(): switch-page runs before the notebook updates
+        # its current page, so that would still return the tab being left.
+        webview = getattr(page, '_bharat_webview', None)
         if webview:
             uri = webview.get_uri() or ""
             title = webview.get_title() or f"Bharat Browser v{self.current_version}"

@@ -190,6 +190,23 @@ class WindowFeatureTests(unittest.TestCase):
         return wv
 
     # ---- tabs ----------------------------------------------------------
+    def test_switching_tabs_shows_that_tabs_address_and_title(self):
+        win = self.win
+        win.create_new_tab(self.base + "/blank")
+        win.create_new_tab(self.base + "/thin")
+        tabs = [win.notebook.get_nth_page(i) for i in range(win.notebook.get_n_pages())]
+        self.assertTrue(spin(lambda: all(not t._bharat_webview.is_loading() and t._bharat_webview.get_title()
+                                         for t in tabs[-2:]), 10))
+        try:
+            for tab in tabs[-2:] + tabs[-2:]:
+                win.notebook.set_current_page(win.notebook.page_num(tab))
+                wv = tab._bharat_webview
+                self.assertEqual(win.url_entry.get_text(), wv.get_uri(), "address bar shows the tab clicked")
+                self.assertTrue(win.get_title().startswith(wv.get_title() + " - "), "window title too")
+        finally:
+            for tab in tabs[-2:]:
+                win.close_tab(tab)
+
     def test_pin_reorder_close_reopen_and_session(self):
         win = self.win
         win.create_new_tab(self.base + "/blank")
