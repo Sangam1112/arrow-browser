@@ -1516,7 +1516,7 @@ class SecretServiceClient:
 PASSWORD_DETECT_JS = r"""
 (function(){
  if (window.top !== window) return;
- function post(m){ try { window.webkit.messageHandlers.bharatPw.postMessage(m); } catch(e){} }
+ function post(m){ m.url = location.href; try { window.webkit.messageHandlers.bharatPw.postMessage(m); } catch(e){} }
  var sent = {};
  function visible(el){ var r = el.getBoundingClientRect(), s = getComputedStyle(el);
    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; }
@@ -3783,6 +3783,10 @@ class BharatBrowserWindow(Gtk.Window):
         # its current page, so that would still return the tab being left.
         webview = getattr(page, '_bharat_webview', None)
         if webview:
+            pending = getattr(webview, "_bharat_pending_fill", None)
+            webview._bharat_pending_fill = None
+            if pending and pending == webview.get_uri():
+                GLib.idle_add(lambda: (self._offer_fill_password(webview, site_host_of(pending), pending), False)[1])
             uri = webview.get_uri() or ""
             title = webview.get_title() or f"Bharat Browser v{self.current_version}"
             self.url_entry.set_text(uri)
@@ -3841,13 +3845,23 @@ class BharatBrowserWindow(Gtk.Window):
                 return False
         return True
 
+    TYPED_TEXT_CHECK_TIMEOUT_MS = 3000
+
     def _sleep_unless_typed(self, tab_box, on_done=None):
         """Put the tab to sleep unless the page holds text the user typed and hasn't sent.
-        Calls on_done(slept) once decided."""
+        Calls on_done(slept) exactly once when decided. A page that doesn't answer within
+        TYPED_TEXT_CHECK_TIMEOUT_MS (a renderer stuck in a script) is left awake, so it
+        can't hold up _relieve_memory_pressure() for the rest of the session."""
+        decided = []
+
         def decide(typed):
+            if decided:
+                return False
+            decided.append(True)
             slept = not typed and self._may_sleep(tab_box) and self._suspend_tab(tab_box)
             if on_done is not None:
                 on_done(slept)
+            return False
 
         def js_done(view, result, _data):
             try:
@@ -3859,6 +3873,7 @@ class BharatBrowserWindow(Gtk.Window):
         if self.typed_text_script is None:
             decide(False)
         else:
+            GLib.timeout_add(self.TYPED_TEXT_CHECK_TIMEOUT_MS, decide, True)
             tab_box._bharat_webview.run_javascript_in_world(TYPED_TEXT_CHECK_JS, TYPED_TEXT_WORLD, None, js_done, None)
 
     def _suspend_tab(self, tab_box):
@@ -5191,6 +5206,7 @@ class BharatBrowserWindow(Gtk.Window):
                 self._apply_site_policy(webview, host)
         if load_event == WebKit2.LoadEvent.STARTED:
             self._fill_offered = {k for k in self._fill_offered if k[0] != id(webview)}
+            webview._bharat_pending_fill = None
         elif load_event == WebKit2.LoadEvent.COMMITTED:
             self._apply_saved_zoom(webview)
         if load_event == WebKit2.LoadEvent.STARTED:
@@ -6707,7 +6723,7 @@ td.c{{text-align:right;color:#cbd5e1;width:70px}}td.b{{width:30%}}td.b span{{dis
             kind = message.get("type")
         except Exception:
             return
-        webview = self.get_active_webview()
+        webview = self._password_message_source(ucm, message.get("url"))
         uri = (webview.get_uri() or "") if webview else ""
         host = site_host_of(uri)
         if not host or self.site_settings.get(host, {}).get("passwords") is False:
@@ -6717,7 +6733,23 @@ td.c{{text-align:right;color:#cbd5e1;width:70px}}td.b{{width:30%}}td.b span{{dis
             if isinstance(user, str) and isinstance(password, str) and 0 < len(password) <= 1024 and len(user) <= 512:
                 self._offer_save_password(host, user, password)
         elif kind == "form" and (uri.startswith("https://") or is_local_network_host(host)):
-            self._offer_fill_password(webview, host, uri)
+            if webview is self.get_active_webview():
+                self._offer_fill_password(webview, host, uri)
+            else:
+                webview._bharat_pending_fill = uri  # offered when the user switches to that tab
+
+    def _password_message_source(self, ucm, url):
+        """The tab a password message came from. Not simply the active tab: a login page can load or submit in a
+        background tab. Tabs opened from a link share their opener's content manager, so the page's address
+        (sent with the message) picks between them."""
+        views = [tb._bharat_webview for tb in self._tab_boxes()
+                 if tb._bharat_webview.get_user_content_manager() == ucm]
+        if isinstance(url, str) and url:
+            page = url.split("#", 1)[0]
+            for view in views:
+                if (view.get_uri() or "").split("#", 1)[0] == page:
+                    return view
+        return views[0] if len(views) == 1 else None
 
     def _offer_save_password(self, host, user, password):
         if not self.secrets.available():

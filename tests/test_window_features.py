@@ -529,6 +529,34 @@ class WindowFeatureTests(unittest.TestCase):
     def asleep(self, tab):
         return id(tab) in self.win._suspended_session_states
 
+    def test_unresponsive_page_does_not_stop_memory_relief(self):
+        win = self.win
+        win.create_new_tab(self.base + "/blank")
+        tab = win.notebook.get_nth_page(win.notebook.get_n_pages() - 1)
+        win.create_new_tab(self.base + "/thin")
+        front = win.notebook.get_nth_page(win.notebook.get_n_pages() - 1)
+        try:
+            self.assertTrue(spin(lambda: not tab._bharat_webview.is_loading(), 10))
+            # A renderer stuck in a script never answers the typed-text check.
+            tab._bharat_webview.run_javascript_in_world = lambda *args: None
+            win.TYPED_TEXT_CHECK_TIMEOUT_MS = 200
+            results = []
+            win._sleep_unless_typed(tab, results.append)
+            self.assertTrue(spin(lambda: results, 3), "never decided")
+            self.assertEqual(results, [False], "a page that doesn't answer stays awake")
+            self.assertFalse(self.asleep(tab))
+            spin(lambda: False, 0.3)
+            self.assertEqual(results, [False], "decided once")
+
+            win._relieving_memory_pressure = False
+            win._relieve_memory_pressure()
+            self.assertTrue(spin(lambda: not win._relieving_memory_pressure, 3), "memory relief stays locked out")
+        finally:
+            del win.TYPED_TEXT_CHECK_TIMEOUT_MS
+            del tab._bharat_webview.run_javascript_in_world
+            win.close_tab(front)
+            win.close_tab(tab)
+
     def test_sleeping_tab_ends_its_renderer_and_comes_back(self):
         self.addCleanup(self.close_new_tabs, self.win._tab_boxes())
         tab = self.open_tab("/article", "Test Article")
@@ -727,6 +755,41 @@ class WindowFeatureTests(unittest.TestCase):
         self.assertTrue(spin(lambda: js(wv, "document.getElementById('p').value") == "hunter2", 5))
         self.assertEqual(js(wv, "document.getElementById('u').value"), "alice")
         self.win.secrets.items.clear()
+
+    def test_password_prompts_belong_to_the_tab_that_sent_them(self):
+        # The visible tab is on another site ("localhost") than the background login page ("127.0.0.1").
+        win = self.win
+        win.secrets.items[("127.0.0.1", "alice")] = "hunter2"
+        before = win.notebook.get_n_pages()
+        try:
+            win.create_new_tab(self.base + "/login")
+            login_tab = win.notebook.get_nth_page(win.notebook.get_n_pages() - 1)
+            login = login_tab._bharat_webview
+            win.create_new_tab(f"http://localhost:{self.port}/blank")
+            front = win.get_active_webview()
+            self.assertTrue(spin(lambda: not login.is_loading() and not front.is_loading()
+                                 and front.get_title() == "blank", 10))
+            spin(lambda: False, 1.0)  # the form message comes 300 ms after load
+            self.assertIsNone(win._infobar, "no fill offer over another site's tab")
+
+            win.notebook.set_current_page(win.notebook.page_num(login_tab))
+            self.assertTrue(spin(lambda: win._infobar is not None, 3), "offered once the login tab is shown")
+            win._infobar.response(1)  # "Fill"
+            self.assertTrue(spin(lambda: js(login, "document.getElementById('p').value") == "hunter2", 5))
+
+            win.secrets.items.clear()
+            win._fill_offered.clear()
+            win.notebook.set_current_page(win.notebook.get_n_pages() - 1)  # back to localhost
+            js(login, "document.getElementById('u').value='carol';document.getElementById('p').value='s3cret';"
+                      "document.getElementById('go').click();'x'")
+            self.assertTrue(spin(lambda: win._infobar is not None, 6), "save prompt for a background submit")
+            win._infobar.response(1)  # "Save"
+            self.assertEqual(win.secrets.items, {("127.0.0.1", "carol"): "s3cret"}, "saved for the tab's own site")
+        finally:
+            win.secrets.items.clear()
+            win._clear_infobar()
+            for i in reversed(range(before, win.notebook.get_n_pages())):
+                win.close_tab(win.notebook.get_nth_page(i))
 
     def test_password_prompt_respects_never_and_private(self):
         self.win.site_settings["127.0.0.1"] = {"passwords": False}
