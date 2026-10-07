@@ -3,6 +3,17 @@
 All notable changes to Arrow Browser (called Bharat Browser up to 1.5.19). Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.6.0] - 2026-10-07
+
+### Changed
+- **Bharat Browser is now Arrow Browser.** The window, menus, pages, installers and packages use the new name. The command is `arrow-browser`, the packages are `arrow-browser_…`, and the project lives at github.com/Sangam1112/arrow-browser (the old address forwards there).
+- **Nothing to do if you already use it.** Installed copies update to Arrow Browser by themselves, as usual. On first start it moves into its new folders and keeps your settings, history, bookmarks, cookies and open tabs. Saved passwords are found under the old name and move to the new one the next time you save them. The `bharat-browser` command keeps working, and installing the new package replaces the old one.
+- **New look:** the saffron-white-green colours and "Made in India" are replaced by the browser's indigo accent, and the icon's ring is a single violet.
+- **The title bar no longer shows the version number.** It's still in Settings → About. Private windows keep "(Private)" in their title.
+
+### License
+- **Arrow Browser is now free software under the GNU General Public License v3.0 or later** (it was MIT). You may use, study, share and change it. Anything you distribute that is based on it must be released under the same license, with its source code. Versions up to 1.5.19 remain available under the MIT License. The packages now include the license text.
+
 ## [1.5.19] - 2026-10-07
 
 ### Fixed

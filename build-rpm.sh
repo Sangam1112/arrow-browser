@@ -78,6 +78,8 @@ python3 -m py_compile /usr/share/arrow-browser/arrow_browser.py >/dev/null 2>&1 
 if [ \$1 -eq 0 ]; then rm -rf /usr/share/arrow-browser/__pycache__; fi
 
 %changelog
+* Wed Oct 07 2026 Arrow Browser Developer <Sangam1112@users.noreply.github.com> - 1.6.0-1
+- Bharat Browser is now Arrow Browser, licensed under the GNU GPL v3
 * Wed Oct 07 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.19-1
 - Minimize and maximize buttons on Windows (WSL)
 * Wed Oct 07 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.18-1
@@ -463,18 +465,18 @@ if [ \$1 -eq 0 ]; then rm -rf /usr/share/arrow-browser/__pycache__; fi
 - Fedora Linux release support
 EOF
 
-    rpmbuild -bb ~/rpmbuild/SPECS/bharat-browser.spec
-    cp ~/rpmbuild/RPMS/noarch/bharat-browser-${VERSION}-1*.noarch.rpm ./
+    rpmbuild -bb ~/rpmbuild/SPECS/arrow-browser.spec
+    cp ~/rpmbuild/RPMS/noarch/arrow-browser-${VERSION}-1*.noarch.rpm ./
 fi
 
-# Package standalone tarball for Fedora. install-fedora.sh copies bharat_browser.py,
-# assets/ and bharat-browser.desktop from its OWN directory, so those must sit next to
+# Package standalone tarball for Fedora. install-fedora.sh copies arrow_browser.py,
+# assets/ and arrow-browser.desktop from its OWN directory, so those must sit next to
 # it at the top level (the usr/ tree alone is not enough: the script would fail with
-# "cp: cannot stat 'bharat_browser.py'"). tests/test_installers.py guards this.
-cp install-fedora.sh bharat_browser.py bharat-browser.desktop LICENSE "${BUILD_ROOT}/"
+# "cp: cannot stat 'arrow_browser.py'"). tests/test_installers.py guards this.
+cp install-fedora.sh arrow_browser.py arrow-browser.desktop LICENSE "${BUILD_ROOT}/"
 cp -r assets "${BUILD_ROOT}/assets"
 chmod +x "${BUILD_ROOT}/install-fedora.sh"
-tar -czf "bharat-browser_${VERSION}_fedora.tar.gz" -C "$BUILD_ROOT" .
+tar -czf "arrow-browser_${VERSION}_fedora.tar.gz" -C "$BUILD_ROOT" .
 mkdir -p "$OUTPUT_DIR"
-cp "bharat-browser_${VERSION}_fedora.tar.gz" "$OUTPUT_DIR/bharat-browser_${VERSION}_fedora.tar.gz"
-echo "Archive generated: bharat-browser_${VERSION}_fedora.tar.gz (copied to $OUTPUT_DIR)"
+cp "arrow-browser_${VERSION}_fedora.tar.gz" "$OUTPUT_DIR/arrow-browser_${VERSION}_fedora.tar.gz"
+echo "Archive generated: arrow-browser_${VERSION}_fedora.tar.gz (copied to $OUTPUT_DIR)"

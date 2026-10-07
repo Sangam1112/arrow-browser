@@ -117,7 +117,7 @@ Packages are on the [**Releases page**](https://github.com/Sangam1112/arrow-brow
 <tr valign="top"><td>
 
 ```bash
-VERSION=1.5.19
+VERSION=1.6.0
 wget https://github.com/Sangam1112/arrow-browser/releases/download/v$VERSION/arrow-browser_${VERSION}-1_all.deb
 sudo apt install ./arrow-browser_${VERSION}-1_all.deb
 ```
@@ -125,7 +125,7 @@ sudo apt install ./arrow-browser_${VERSION}-1_all.deb
 </td><td>
 
 ```bash
-VERSION=1.5.19
+VERSION=1.6.0
 wget https://github.com/Sangam1112/arrow-browser/releases/download/v$VERSION/arrow-browser-${VERSION}-1.noarch.rpm
 sudo dnf install ./arrow-browser-${VERSION}-1.noarch.rpm
 ```
@@ -158,7 +158,7 @@ export PATH="$HOME/.local/bin:$PATH"
 <summary><b>Fedora without git</b>: use the release archive</summary>
 
 ```bash
-VERSION=1.5.19
+VERSION=1.6.0
 wget https://github.com/Sangam1112/arrow-browser/releases/download/v$VERSION/arrow-browser_${VERSION}_fedora.tar.gz
 mkdir -p /tmp/arrow_fedora
 tar -xzf arrow-browser_${VERSION}_fedora.tar.gz -C /tmp/arrow_fedora
