@@ -1136,5 +1136,19 @@ class WindowFeatureTests(unittest.TestCase):
             private.destroy()
 
 
+    def test_windows_get_minimize_and_maximize_buttons_under_wsl(self):
+        original = bb.running_under_wsl
+        bb.running_under_wsl = lambda: True
+        try:
+            wsl = bb.BharatBrowserWindow(private=True)
+        finally:
+            bb.running_under_wsl = original
+        try:
+            self.assertEqual(wsl._titlebar.get_decoration_layout(), ":minimize,maximize,close")
+        finally:
+            wsl.destroy()
+        self.assertIsNone(self.win._titlebar.get_decoration_layout(), "on Linux the desktop's own layout is kept")
+
+
 if __name__ == "__main__":
     unittest.main()

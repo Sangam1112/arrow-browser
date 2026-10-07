@@ -272,6 +272,22 @@ def webkit_sandbox_usable():
     return _SANDBOX_USABLE
 
 
+def running_under_wsl(environ=os.environ, version_file="/proc/version"):
+    """True inside WSL, i.e. on Windows, where WSLg shows Linux apps as Windows windows."""
+    if environ.get("WSL_DISTRO_NAME") or environ.get("WSL_INTEROP"):
+        return True
+    try:
+        with open(version_file, encoding="utf-8", errors="replace") as f:
+            return "microsoft" in f.read().lower()
+    except OSError:
+        return False
+
+
+# Title-bar buttons for Windows (WSL). A Linux desktop says which buttons windows get; under WSL nothing does,
+# so GTK falls back to GNOME's default "appmenu:close" and the window had only a close button.
+WSL_DECORATION_LAYOUT = ":minimize,maximize,close"
+
+
 def is_local_network_host(host):
     """True for LAN/loopback addresses and bare local hostnames, which usually
     only serve plain HTTP (routers, printers, IoT devices, dev servers) and have
@@ -2217,9 +2233,12 @@ class BharatBrowserWindow(Gtk.Window):
         # a large light-themed strip for the page title and ate vertical space)
         titlebar = Gtk.HeaderBar()
         titlebar.set_show_close_button(True)
+        if running_under_wsl():
+            titlebar.set_decoration_layout(WSL_DECORATION_LAYOUT)
         titlebar.set_title("")
         titlebar.get_style_context().add_class("bharat-titlebar")
         self.set_titlebar(titlebar)
+        self._titlebar = titlebar
 
         self.icon_path = None
         icon_candidates = [

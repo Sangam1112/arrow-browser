@@ -59,7 +59,9 @@ run() { exec python3 -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1));
 if [ -f "${HOME}/.local/share/bharat-browser/bharat_browser.py" ]; then
     run "${HOME}/.local/share/bharat-browser" "$@"
 else
-    run . "$@"
+    echo "bharat-browser: no installed copy found in ~/.local/share/bharat-browser." >&2
+    echo "Reinstall Bharat Browser from https://github.com/Sangam1112/bharat-browser/releases" >&2
+    exit 1
 fi
 EOF
 chmod +x "$BIN_DIR/bharat-browser"

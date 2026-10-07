@@ -85,6 +85,21 @@ class UrlHelperTests(unittest.TestCase):
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
+    def test_running_under_wsl(self):
+        d = tempfile.mkdtemp()
+        try:
+            wsl, linux = os.path.join(d, "wsl"), os.path.join(d, "linux")
+            with open(wsl, "w") as f:
+                f.write("Linux version 5.15.167.4-microsoft-standard-WSL2 (root@...)")
+            with open(linux, "w") as f:
+                f.write("Linux version 7.0.0-linuxlite (gcc ...)")
+            self.assertTrue(bb.running_under_wsl({}, wsl))
+            self.assertFalse(bb.running_under_wsl({}, linux))
+            self.assertTrue(bb.running_under_wsl({"WSL_DISTRO_NAME": "Ubuntu"}, linux))
+            self.assertFalse(bb.running_under_wsl({}, os.path.join(d, "missing")))
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
     def test_risky_downloads(self):
         for name in ("invoice.pdf.desktop", "setup.SH", "app.AppImage", "x.deb", "run.py"):
             self.assertTrue(bb.is_risky_download(name), name)
