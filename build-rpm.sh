@@ -66,6 +66,8 @@ python3 -m py_compile /usr/share/bharat-browser/bharat_browser.py >/dev/null 2>&
 if [ \$1 -eq 0 ]; then rm -rf /usr/share/bharat-browser/__pycache__; fi
 
 %changelog
+* Wed Oct 07 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.16-1
+- Dark mode no longer turns already-dark websites white
 * Tue Oct 06 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.15-1
 - Padlock reflects the verified connection; certificate details
 * Tue Oct 06 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.14-1

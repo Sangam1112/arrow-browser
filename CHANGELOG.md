@@ -3,6 +3,11 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.5.16] - 2026-10-07
+
+### Fixed
+- **Dark mode turned dark websites white.** "Dark mode for websites" works by flipping a page's colours, light to dark. It did that to every page, so a site that was already dark came out light grey or white. That includes the many sites that follow your desktop's dark theme. Before flipping, the browser now checks whether the page is already dark and leaves dark pages as they are. It checks again when a site switches to its own dark theme after loading. Turning dark mode on in Settings, or with the moon button, no longer whitens the dark page you're on.
+
 ## [1.5.15] - 2026-10-06
 
 ### Changed
