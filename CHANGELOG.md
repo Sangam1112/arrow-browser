@@ -3,6 +3,12 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.5.19] - 2026-10-07
+
+### Fixed
+- **On Windows the window had only a close button.** Bharat Browser draws its own title bar and shows the buttons your Linux desktop asks for. On Windows (through WSL) there is no Linux desktop to ask, so only ✕ appeared. On Windows the title bar now has minimize, maximize and close, like other Windows apps. On Linux it still follows your desktop's setting.
+- **The WSL installer's launcher no longer runs code from whatever folder you start it in**, matching the other installers since 1.5.17.
+
 ## [1.5.18] - 2026-10-07
 
 ### Fixed

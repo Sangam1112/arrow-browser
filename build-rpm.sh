@@ -69,6 +69,8 @@ python3 -m py_compile /usr/share/bharat-browser/bharat_browser.py >/dev/null 2>&
 if [ \$1 -eq 0 ]; then rm -rf /usr/share/bharat-browser/__pycache__; fi
 
 %changelog
+* Wed Oct 07 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.19-1
+- Minimize and maximize buttons on Windows (WSL)
 * Wed Oct 07 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.18-1
 - The browser no longer says it's on the latest version before checking
 * Wed Oct 07 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.17-1
