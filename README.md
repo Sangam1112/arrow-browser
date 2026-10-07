@@ -45,7 +45,6 @@ It is a native GTK3 desktop app, not a repackaged Chromium or Electron. The ad b
 - **Privacy report** to see what was stopped, and **private windows** that write nothing to disk.
 
 **🧭 Everyday touches**
-- **Reader mode** (`Ctrl+Alt+R`): any article as a clean page with adjustable text size and themes.
 - **Pinned tabs** that survive restarts, plus a one-key way to reopen a closed tab.
 - **Tab Memory** (main menu): see which tab is using the most memory, then suspend or close it from the list.
 - **Switch in a minute**: import bookmarks and history from Firefox, Chrome, Brave, Edge, Vivaldi, Opera and more.
@@ -78,12 +77,11 @@ Measured head-to-head on Linux under identical workloads (`example.com`, `wikipe
 
 <table>
   <tr>
-    <td align="center"><b>Reader mode</b> (Ctrl+Alt+R)<br><img src="docs/screenshots/reader-mode.png" alt="Reader mode" width="400"></td>
     <td align="center"><b>Privacy report</b><br><img src="docs/screenshots/privacy-report.png" alt="Privacy report" width="400"></td>
+    <td align="center"><b>Password prompt &amp; pinned tab</b><br><img src="docs/screenshots/password-prompt.png" alt="Password prompt and a pinned tab" width="400"></td>
   </tr>
   <tr>
-    <td align="center"><b>Password prompt &amp; pinned tab</b><br><img src="docs/screenshots/password-prompt.png" alt="Password prompt and a pinned tab" width="400"></td>
-    <td align="center"><b>HTTPS-only warning</b><br><img src="docs/screenshots/https-warning.png" alt="HTTPS-only warning page" width="400"></td>
+    <td align="center" colspan="2"><b>HTTPS-only warning</b><br><img src="docs/screenshots/https-warning.png" alt="HTTPS-only warning page" width="400"></td>
   </tr>
 </table>
 
@@ -296,12 +294,12 @@ Saved passwords are in your system keyring, not in those folders: remove them fi
 | Close tab | `Ctrl+W` | Bookmark page | `Ctrl+D` |
 | Reopen closed tab | `Ctrl+Shift+T` | Bookmark manager | `Ctrl+Shift+O` |
 | Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` | History dashboard | `Ctrl+H` |
-| New private window | `Ctrl+Shift+N` | Reader mode | `Ctrl+Alt+R` |
+| New private window | `Ctrl+Shift+N` | | |
 | Focus address bar | `Ctrl+L` | Print / save as PDF | `Ctrl+P` |
 | Back / forward | `Alt+←` / `Alt+→` | Zoom in / out / reset | `Ctrl++` / `Ctrl+-` / `Ctrl+0` |
 | Reload | `F5` or `Ctrl+R` | Developer inspector* | `F12` or `Ctrl+Shift+I` |
 
-\* Turn on **Developer tools** in Settings → Advanced first. Touchpad swipe also goes back/forward.
+\* Off by default. To turn it on, set `"dev_tools_enabled": true` in `~/.config/bharat-browser/settings.json` and restart. Touchpad swipe also goes back/forward.
 
 ---
 

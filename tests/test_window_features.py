@@ -31,8 +31,8 @@ HAVE_DISPLAY = Gtk.init_check()[0] if isinstance(Gtk.init_check(), tuple) else b
 
 ARTICLE = ("<html><head><title>Test Article</title><meta name='author' content='A. Writer'></head><body>"
            "<nav><a href='/'>Home</a> <a href='/menu'>Menu</a></nav><div class='content'><h1>The Great Test</h1>"
-           + "".join(f"<p>Paragraph {i}: the quick brown fox jumps over the lazy dog while the reader mode "
-                     f"extractor decides what counts as the real article text on this page.</p>" for i in range(6))
+           + "".join(f"<p>Paragraph {i}: the quick brown fox jumps over the lazy dog while the test "
+                     f"checks that a long article page loads and keeps its text.</p>" for i in range(6))
            + "<div class='share'><a href='/s'>Share this</a></div></div><footer>Copyright</footer></body></html>")
 PAGES = {
     "/blank": "<html><title>blank</title></html>",
@@ -86,6 +86,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b"PK" * 5)
             self.wfile.flush()
             self.close_connection = True
+            return
+        if path.endswith(".desktop"):
+            body = b"[Desktop Entry]\nType=Application\nExec=true\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-desktop")
+            self.send_header("Content-Disposition", "attachment")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if path == "/pixel" or path.endswith(".png"):
             body, ctype = b"\x89PNG", "image/png"
@@ -439,6 +448,24 @@ class WindowFeatureTests(unittest.TestCase):
         self.assertTrue(spin(lambda: second["status"] != "Downloading...", 10))
         self.assertNotEqual(second["path"], entry["path"], "an existing file is never overwritten")
 
+    def test_risky_download_is_confirmed_first(self):
+        folder = tempfile.mkdtemp(dir=_HOME)
+        self.win.download_dir = folder
+        self.addCleanup(setattr, self.win, "download_dir", "")
+        original = self.win._confirm_risky_download
+        self.addCleanup(setattr, self.win, "_confirm_risky_download", original)
+        asked = []
+        self.win._confirm_risky_download = lambda name, source: asked.append(name) or False
+        entry = self.start_download("/invoice.pdf.desktop")
+        self.assertTrue(spin(lambda: entry["status"] != "Downloading...", 10), entry)
+        self.assertEqual(entry["status"], "Cancelled")
+        self.assertEqual(asked, ["invoice.pdf.desktop"])
+        self.assertEqual(os.listdir(folder), [], "nothing saved when the user says no")
+        self.win._confirm_risky_download = lambda name, source: True
+        entry = self.start_download("/invoice.pdf.desktop")
+        self.assertTrue(spin(lambda: entry["status"] != "Downloading...", 10), entry)
+        self.assertEqual(entry["status"], "Completed ✅")
+
     def test_failed_download_stays_failed(self):
         self.win.download_dir = tempfile.mkdtemp(dir=_HOME)
         self.addCleanup(setattr, self.win, "download_dir", "")
@@ -769,16 +796,52 @@ class WindowFeatureTests(unittest.TestCase):
             def allow(self): calls.append("allow")
             def deny(self): calls.append("deny")
 
-        original = self.win._permission_kind
-        self.win._permission_kind = lambda r: "media"
+        original = self.win._describe_permission
+        self.win._describe_permission = lambda r: ("media", "use your camera")
         try:
             bb.set_site_value(self.win.site_settings, "127.0.0.1", "permissions", "allow", sub="media")
             self.assertTrue(self.win.on_permission_request(wv, Req()))
             bb.set_site_value(self.win.site_settings, "127.0.0.1", "permissions", "deny", sub="media")
             self.win.on_permission_request(wv, Req())
         finally:
-            self.win._permission_kind = original
+            self.win._describe_permission = original
+            self.win.site_settings.clear()
         self.assertEqual(calls, ["allow", "deny"])
+
+    def test_permissions_nobody_can_judge_are_refused_without_asking(self):
+        wv = self.load("/blank")
+        calls = []
+
+        class Unknown:  # e.g. a WebXR session or a request type added in a later WebKit
+            def allow(self): calls.append("allow")
+            def deny(self): calls.append("deny")
+
+        self.assertEqual(self.win._describe_permission(Unknown()), (None, None))
+        self.assertTrue(self.win.on_permission_request(wv, Unknown()))  # a prompt here would block the test
+        self.assertEqual(calls, ["deny"])
+
+    # ---- sandbox, fullscreen ----------------------------------------------
+    def test_web_pages_run_in_the_sandbox(self):
+        self.assertTrue(bb.webkit_sandbox_usable(), "bubblewrap can't start a sandbox on this machine")
+        self.assertTrue(self.win.context.get_sandbox_enabled())
+
+    def test_fullscreen_names_the_site_and_how_to_leave(self):
+        win = self.win
+        wv = self.load("/blank")
+        original = win._apply_hardware_acceleration_policy
+        win._apply_hardware_acceleration_policy = lambda: None  # a GPU policy flip isn't what's tested here
+        try:
+            win.on_webview_enter_fullscreen(wv)
+            self.assertTrue(win.fullscreen_notice.get_visible())
+            self.assertIn("127.0.0.1", win.fullscreen_notice.get_text())
+            self.assertIn("Esc", win.fullscreen_notice.get_text())
+            win.on_webview_leave_fullscreen(wv)
+            self.assertFalse(win.fullscreen_notice.get_visible())
+            self.assertIsNone(win._fullscreen_notice_source)
+        finally:
+            win._apply_hardware_acceleration_policy = original
+            if win._fullscreen:
+                win.on_webview_leave_fullscreen(wv)
 
     # ---- https warning --------------------------------------------------
     def test_https_warning_and_one_time_token(self):
@@ -805,18 +868,6 @@ class WindowFeatureTests(unittest.TestCase):
         self.assertNotIn("refresh", again.body, "the token is single-use")
         self.win._http_allowed_hosts.discard("plain-only.example")
 
-    # ---- reader mode ----------------------------------------------------
-    def test_reader_mode_opens_on_articles_only(self):
-        wv = self.load("/article")
-        self.win.toggle_reader_mode()
-        self.assertTrue(spin(lambda: js(wv, "String(!!document.getElementById('__bharat_reader'))") == "true", 8))
-        self.win.toggle_reader_mode()
-        self.assertTrue(spin(lambda: js(wv, "String(!!document.getElementById('__bharat_reader'))") == "false", 8), "second call closes it")
-        wv = self.load("/thin")
-        self.win.toggle_reader_mode()
-        spin(lambda: False, 0.5)
-        self.assertEqual(js(wv, "String(!!document.getElementById('__bharat_reader'))"), "false", "no article, no reader")
-
     # ---- passwords ------------------------------------------------------
     def test_password_save_then_fill(self):
         wv = self.load("/login")
@@ -832,6 +883,21 @@ class WindowFeatureTests(unittest.TestCase):
         self.assertTrue(spin(lambda: js(wv, "document.getElementById('p').value") == "hunter2", 5))
         self.assertEqual(js(wv, "document.getElementById('u').value"), "alice")
         self.win.secrets.items.clear()
+
+    def test_fill_offer_never_fills_another_site(self):
+        win = self.win
+        win.secrets.items[("127.0.0.1", "alice")] = "hunter2"
+        self.addCleanup(win.secrets.items.clear)
+        wv = self.load("/login")
+        self.assertTrue(spin(lambda: win._infobar is not None, 6), "fill offer appears on a login page")
+        bar = win._infobar
+        other = f"http://localhost:{self.port}/login"  # another site, same login form
+        wv.load_uri(other)
+        self.assertTrue(spin(lambda: not wv.is_loading() and wv.get_uri() == other, 10))
+        self.assertIsNone(win._infobar, "the fill offer closes when the tab goes to another page")
+        bar.response(1)  # "Fill" clicked anyway (e.g. the click landed just as the page changed)
+        spin(lambda: False, 0.5)
+        self.assertEqual(js(wv, "document.getElementById('p').value"), "", "password went to another site")
 
     def test_password_prompts_belong_to_the_tab_that_sent_them(self):
         # The visible tab is on another site ("localhost") than the background login page ("127.0.0.1").
@@ -925,7 +991,7 @@ class WindowFeatureTests(unittest.TestCase):
         try:
             stack = dialog._bharat_stack
             self.assertEqual([stack.child_get_property(c, "name") for c in stack.get_children()],
-                             ["general", "privacy", "data", "performance", "advanced", "about"])
+                             ["general", "privacy", "data", "performance", "about"])
             self.assertEqual(stack.get_visible_child_name(), "privacy")
             controls = dialog._bharat_controls
             for key, sw in controls.items():

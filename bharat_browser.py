@@ -250,6 +250,28 @@ STREAMING_EXEMPT_EXTENSIONS = ('.m3u8', '.mpd')
 
 LOCAL_HOST_SUFFIXES = ('.local', '.lan', '.home', '.internal', '.localdomain')
 
+_SANDBOX_USABLE = None
+
+
+def webkit_sandbox_usable():
+    """True when WebKit can put every web page in a bubblewrap sandbox here. A page that breaks into its web
+    process then has no access to your files. Probed once per run: bubblewrap must exist and be allowed to
+    start (some systems forbid the user namespaces it needs). Turned on without that check, no page would load
+    at all. BHARAT_NO_SANDBOX=1 turns it off."""
+    global _SANDBOX_USABLE
+    if _SANDBOX_USABLE is None:
+        _SANDBOX_USABLE = False
+        bwrap = shutil.which("bwrap")
+        if os.environ.get("BHARAT_NO_SANDBOX") != "1" and bwrap and shutil.which("xdg-dbus-proxy"):
+            try:
+                _SANDBOX_USABLE = subprocess.run(
+                    [bwrap, "--unshare-all", "--die-with-parent", "--ro-bind", "/", "/", "true"],
+                    stdin=subprocess.DEVNULL, capture_output=True, timeout=5).returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                pass
+    return _SANDBOX_USABLE
+
+
 def is_local_network_host(host):
     """True for LAN/loopback addresses and bare local hostnames, which usually
     only serve plain HTTP (routers, printers, IoT devices, dev servers) and have
@@ -405,12 +427,26 @@ def startup_urls_from_args(args):
 
 def download_filename(suggested, uri=""):
     """A safe file name for a download: the server's suggested name (Content-Disposition), else the last part of
-    the address, never a path."""
+    the address. Never a path, and never a hidden file (a leading dot): a site could otherwise drop something
+    like .profile into the download folder without it showing up."""
     for candidate in (suggested, urllib.parse.unquote(urllib.parse.urlparse(uri or "").path.rsplit("/", 1)[-1])):
-        name = (candidate or "").replace("/", "_").replace("\0", "").strip()
-        if name and name not in (".", ".."):
+        name = re.sub(r"[\x00-\x1f\x7f]", "", (candidate or "").replace("/", "_")).strip().lstrip(".").strip()
+        if name:
             return name
     return "download"
+
+
+# Files that run as programs or install software when opened: a site can save a download without asking, so
+# these are confirmed first (a fake "invoice.pdf.desktop" next to your real files is the classic trick).
+RISKY_DOWNLOAD_EXTENSIONS = {
+    ".desktop", ".sh", ".bash", ".zsh", ".csh", ".ksh", ".run", ".bin", ".appimage", ".deb", ".rpm", ".snap",
+    ".flatpak", ".flatpakref", ".py", ".pyw", ".pl", ".rb", ".jar", ".exe", ".msi", ".bat", ".cmd", ".ps1",
+    ".vbs", ".scr", ".com", ".command", ".kdesktop",
+}
+
+
+def is_risky_download(filename):
+    return os.path.splitext(filename.lower())[1] in RISKY_DOWNLOAD_EXTENSIONS
 
 # Tracks how many top-level BharatBrowserWindow instances (the main window
 # plus any private windows, which are siblings, not children, of it) are
@@ -527,8 +563,8 @@ UPDATE_INFO_SOURCES = (
 
 
 def fetch_release_info(user_agent, timeout=8, sources=None):
-    """package.json of the latest release as a dict with at least a "version" string.
-    Raises the last error if every source fails."""
+    """package.json of the latest release as a dict with at least a "version" string, always X.Y.Z (it goes into
+    download addresses and on-screen text). Raises the last error if every source fails."""
     last_error = RuntimeError("no update source configured")
     for url, headers in (sources or UPDATE_INFO_SOURCES):
         try:
@@ -537,7 +573,8 @@ def fetch_release_info(user_agent, timeout=8, sources=None):
                 if response.status != 200:
                     raise RuntimeError(f"HTTP {response.status} from {url}")
                 data = json.loads(response.read(1 << 20).decode("utf-8"))
-            if isinstance(data, dict) and isinstance(data.get("version"), str) and data["version"].strip():
+            if (isinstance(data, dict) and isinstance(data.get("version"), str)
+                    and re.fullmatch(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}", data["version"].strip())):
                 return data
             raise ValueError(f"unexpected update info from {url}")
         except Exception as e:
@@ -1064,7 +1101,8 @@ def parse_netscape_bookmarks(text):
 # Per-site settings (permissions, zoom, ad blocking, JavaScript)
 # ---------------------------------------------------------------------------
 SITE_SETTINGS_FILE = os.path.join(CONFIG_DIR, "site_settings.json")
-PERMISSION_KINDS = {"media": "Camera & microphone", "location": "Location", "notifications": "Notifications"}
+PERMISSION_KINDS = {"media": "Camera & microphone", "location": "Location", "notifications": "Notifications",
+                    "drm": "Protected (DRM) video"}
 
 
 def load_site_settings():
@@ -1594,139 +1632,6 @@ PASSWORD_FILL_JS = r"""
 })(%s, %s);
 """
 
-# ---------------------------------------------------------------------------
-# Reader mode: builds a clean, readable copy of the article in a closed shadow
-# root and removes it again on the second call. Returns 'opened', 'closed' or
-# 'no-article'. Only whitelisted tags/attributes are copied, so no page script,
-# event handler or style from the original can run inside the reader.
-# ---------------------------------------------------------------------------
-READER_MODE_JS = r"""
-(function(){
- var OID = '__bharat_reader', old = document.getElementById(OID);
- if (old) { old.remove(); document.documentElement.style.overflow = window.__bharatPrevOverflow || ''; return 'closed'; }
- var DROP = {SCRIPT:1,STYLE:1,NOSCRIPT:1,IFRAME:1,FORM:1,BUTTON:1,INPUT:1,SELECT:1,TEXTAREA:1,SVG:1,CANVAS:1,
-   VIDEO:1,AUDIO:1,OBJECT:1,EMBED:1,NAV:1,ASIDE:1,FOOTER:1,TEMPLATE:1,DIALOG:1};
- var KEEP = {P:1,H1:1,H2:1,H3:1,H4:1,H5:1,H6:1,UL:1,OL:1,LI:1,BLOCKQUOTE:1,PRE:1,CODE:1,A:1,IMG:1,FIGURE:1,
-   FIGCAPTION:1,STRONG:1,B:1,EM:1,I:1,BR:1,HR:1,TABLE:1,THEAD:1,TBODY:1,TR:1,TD:1,TH:1,SUB:1,SUP:1};
- var BAD = /(^|[\s_-])(ad|ads|advert|banner|comment|comments|cookie|footer|menu|modal|newsletter|popup|promo|related|share|sharing|sidebar|social|sponsor|subscribe|widget)([\s_-]|$)/i;
- function tl(el){ return (el.innerText || '').trim().length; }
- function ll(el){ var n = 0; el.querySelectorAll('a').forEach(function(a){ n += (a.innerText || '').length; }); return n; }
- var scores = new Map();
- document.querySelectorAll('p').forEach(function(p){
-   var t = (p.innerText || '').trim().length;
-   if (t < 40 || p.closest('nav,aside,footer,form')) return;
-   var par = p.parentElement; if (!par) return;
-   scores.set(par, (scores.get(par) || 0) + t);
-   var gp = par.parentElement; if (gp) scores.set(gp, (scores.get(gp) || 0) + t / 2); });
- var best = null, bs = 0;
- scores.forEach(function(s, el){
-   var len = tl(el) || 1, cls = (el.className && el.className.baseVal === undefined ? el.className : '') + ' ' + (el.id || '');
-   s *= (1 - Math.min(1, ll(el) / len));
-   if (/article|main|content|post|entry|story/i.test(cls)) s *= 1.2;
-   if (BAD.test(cls)) s *= 0.3;
-   if (s > bs) { bs = s; best = el; } });
- if (!best || bs < 250) return 'no-article';
- function clean(node, out){
-   node.childNodes.forEach(function(c){
-     if (c.nodeType === 3) { out.appendChild(document.createTextNode(c.nodeValue)); return; }
-     if (c.nodeType !== 1) return;
-     var tag = c.tagName.toUpperCase();
-     if (DROP[tag] || c.hidden || c.getAttribute('aria-hidden') === 'true') return;
-     var cls = (typeof c.className === 'string' ? c.className : '') + ' ' + (c.id || '');
-     if (tag !== 'P' && BAD.test(cls) && tl(c) < 600) return;
-     if (KEEP[tag]) {
-       var e = document.createElement(tag);
-       if (tag === 'A') { var h = c.href; if (/^https?:/i.test(h)) { e.href = h; e.rel = 'noopener noreferrer'; } }
-       if (tag === 'IMG') { var src = c.currentSrc || c.src; if (!/^https?:|^data:image\//i.test(src || '')) return; e.src = src; e.alt = c.alt || ''; }
-       clean(c, e); out.appendChild(e);
-     } else clean(c, out); }); }
- var body = document.createElement('div'); clean(best, body);
- var h1 = best.querySelector('h1') || document.querySelector('h1');
- var title = (h1 && h1.innerText.trim()) || document.title || '';
- var dup = body.querySelector('h1');   // the page's own headline is shown once, as our title
- if (dup && dup.textContent.trim() === title) dup.remove();
- var by = document.querySelector('meta[name=author]');
- var host = document.createElement('div'); host.id = OID;
- host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;';
- var root = host.attachShadow({mode: 'closed'});
- var themes = [['#fbfbf8', '#222', '#0b57d0'], ['#f4ecd8', '#3b3226', '#8a4b08'], ['#14171c', '#d8dde6', '#8ab4f8']];
- var ti = 0, fs = 19;
- var st = document.createElement('style');
- st.textContent = '.wrap{position:absolute;inset:0;overflow:auto;font-family:Georgia,"Noto Serif",serif;line-height:1.7}' +
-  '.bar{position:sticky;top:0;display:flex;gap:8px;justify-content:flex-end;padding:10px 16px;font:14px system-ui,sans-serif}' +
-  '.bar button{border:1px solid currentColor;background:transparent;color:inherit;border-radius:999px;padding:4px 12px;cursor:pointer;opacity:.75}' +
-  '.bar button:hover{opacity:1}.col{max-width:680px;margin:0 auto;padding:10px 22px 80px}' +
-  'h1.t{font-size:1.9em;line-height:1.25;margin:.4em 0 .2em}.by{font:14px system-ui,sans-serif;opacity:.7;margin-bottom:1.5em}' +
-  'img{max-width:100%;height:auto}pre{overflow:auto;padding:12px;background:rgba(127,127,127,.15)}' +
-  'blockquote{border-left:3px solid currentColor;margin-left:0;padding-left:16px;opacity:.85}table{border-collapse:collapse}td,th{border:1px solid rgba(127,127,127,.4);padding:4px 8px}';
- var wrap = document.createElement('div'); wrap.className = 'wrap';
- var bar = document.createElement('div'); bar.className = 'bar';
- function btn(label, fn){ var b = document.createElement('button'); b.textContent = label; b.onclick = fn; bar.appendChild(b); }
- function apply(){ var t = themes[ti]; wrap.style.background = t[0]; wrap.style.color = t[1]; wrap.style.fontSize = fs + 'px';
-   col.querySelectorAll('a').forEach(function(a){ a.style.color = t[2]; }); }
- btn('A−', function(){ fs = Math.max(13, fs - 2); apply(); });
- btn('A+', function(){ fs = Math.min(32, fs + 2); apply(); });
- btn('Theme', function(){ ti = (ti + 1) % themes.length; apply(); });
- function close(){ host.remove(); document.documentElement.style.overflow = window.__bharatPrevOverflow || ''; }
- btn('✕ Close', close);
- var col = document.createElement('div'); col.className = 'col';
- var t = document.createElement('h1'); t.className = 't'; t.textContent = title; col.appendChild(t);
- if (by && by.content) { var b2 = document.createElement('div'); b2.className = 'by'; b2.textContent = by.content; col.appendChild(b2); }
- col.appendChild(body);
- wrap.appendChild(bar); wrap.appendChild(col); root.appendChild(st); root.appendChild(wrap);
- window.__bharatPrevOverflow = document.documentElement.style.overflow;
- document.documentElement.style.overflow = 'hidden';
- document.addEventListener('keydown', function esc(e){ if (e.key === 'Escape' && document.getElementById(OID)) { close(); document.removeEventListener('keydown', esc, true); } }, true);
- document.documentElement.appendChild(host); apply();
- return 'opened';
-})();
-"""
-
-_GPU_INFO_CACHE = None
-
-def detect_gpu_info():
-    """Best-effort GPU identification for the Settings 'GPU Acceleration' card.
-    Tries glxinfo first since it reports the actual OpenGL renderer WebKit's
-    compositor will use (and whether it's really hardware-accelerated),
-    falling back to lspci's PCI device name. Never raises — display text only.
-    Cached at module scope: the GPU doesn't change mid-session, so every new
-    window (including private windows) reuses the first result instead of
-    re-running subprocess calls — each with its own multi-second timeout —
-    on every single window open."""
-    global _GPU_INFO_CACHE
-    if _GPU_INFO_CACHE is not None:
-        return _GPU_INFO_CACHE
-    _GPU_INFO_CACHE = _detect_gpu_info_uncached()
-    return _GPU_INFO_CACHE
-
-def _detect_gpu_info_uncached():
-    try:
-        out = subprocess.run(
-            ["glxinfo", "-B"], capture_output=True, text=True, timeout=3
-        ).stdout
-        renderer = re.search(r"OpenGL renderer string:\s*(.+)", out)
-        direct = re.search(r"direct rendering:\s*(.+)", out)
-        if renderer:
-            label = renderer.group(1).strip()
-            if direct and not direct.group(1).strip().lower().startswith("yes"):
-                label += " (no direct rendering — software fallback)"
-            return label
-    except Exception:
-        pass
-    try:
-        out = subprocess.run(
-            ["lspci", "-nn"], capture_output=True, text=True, timeout=3
-        ).stdout
-        for line in out.splitlines():
-            if re.search(r"VGA compatible controller|3D controller|Display controller", line):
-                match = re.search(r":\s*(.+?)\s*\[[0-9a-f]{4}:[0-9a-f]{4}\](?:\s*\(rev.*\))?\s*$", line)
-                if match:
-                    return match.group(1).strip()
-                return line.split(":", 2)[-1].strip()
-    except Exception:
-        pass
-    return "Unknown GPU (detection unavailable)"
-
 # Anti-Fingerprinting Farbling Engine JS
 # Registered as a UserScript with START injection time so it patches
 # canvas/WebGL/audio/navigator APIs before any page script can read the originals.
@@ -1756,8 +1661,6 @@ FARBLING_EXEMPT_JS = r"""(function(host, path) {
 })""".replace("__BHARAT_FARBLE_EXEMPT__", json.dumps([list(e) for e in FARBLING_EXEMPT]))
 FARBLING_JS = r"""
 (function() {
-    if (window.__bharat_farbling__) return;
-    window.__bharat_farbling__ = true;
     const host = window.location.hostname;
     if (__BHARAT_FARBLE_EXEMPT_JS__(host, window.location.pathname)) return;
 
@@ -1830,8 +1733,9 @@ FARBLING_JS = r"""
             if (!proto) continue;
             const getParam = proto.getParameter;
             proto.getParameter = function(param) {
-                if (param === 37445) return "Generic Open-Source GPU Engine";
-                if (param === 37446) return "Bharat Privacy WebGL Renderer";
+                // A common real Linux GPU, so the answer hides this computer's GPU without naming this browser.
+                if (param === 37445) return "Intel";
+                if (param === 37446) return "Mesa Intel(R) UHD Graphics 620 (KBL GT2)";
                 return getParam.apply(this, arguments);
             };
             const readPixels = proto.readPixels;
@@ -1905,8 +1809,6 @@ def farbling_js(seed):
 # Smart Link Prefetching UserScript JS
 PREFETCH_USER_SCRIPT = """
 (function() {
-    if (window.__bharat_prefetch_listener__) return;
-    window.__bharat_prefetch_listener__ = true;
 
     // mouseover bubbles from every element the pointer crosses (including
     // deeply nested children of a link), so this can fire hundreds of times
@@ -2020,8 +1922,6 @@ DARK_DETECT_JS = """
 
 MEDIA_POLYFILL_JS = """
 (function() {
-    if (window.__bharat_media_polyfill__) return;
-    window.__bharat_media_polyfill__ = true;
 
     if (window.MediaSource && window.MediaSource.isTypeSupported) {
         const origIsTypeSupported = window.MediaSource.isTypeSupported;
@@ -2070,9 +1970,10 @@ MEDIA_POLYFILL_JS = """
         };
     }
 
+    const boosted = new WeakSet();  // not a property on the element, where pages could see it
     function boostVideo(v) {
-        if (!v.__bharat_boosted__) {
-            v.__bharat_boosted__ = true;
+        if (!boosted.has(v)) {
+            boosted.add(v);
             v.preload = 'auto';
         }
     }
@@ -2394,13 +2295,6 @@ class BharatBrowserWindow(Gtk.Window):
         self._fill_offered = set()
         self._infobar = None
         self.secrets = SecretServiceClient()
-        # glxinfo/lspci can take ~1s+ (3s timeout each) and the result is only
-        # display text in Settings, so detect it off the GTK thread instead of
-        # blocking the first window from appearing.
-        self.gpu_info_label = _GPU_INFO_CACHE if _GPU_INFO_CACHE is not None else "Detecting..."
-        if _GPU_INFO_CACHE is None:
-            threading.Thread(target=self._detect_gpu_info_async, daemon=True).start()
-
         # URL-bar autocomplete history. Never loaded/written for private
         # windows, matching the session-state privacy guarantee.
         self._history_save_source = None
@@ -2429,6 +2323,10 @@ class BharatBrowserWindow(Gtk.Window):
             self.context = WebKit2.WebContext.new_with_website_data_manager(self.data_mgr)
         else:
             self.context = WebKit2.WebContext.get_default()
+
+        # Must be set before the context starts its first web process.
+        if hasattr(self.context, "set_sandbox_enabled") and webkit_sandbox_usable():
+            self.context.set_sandbox_enabled(True)
 
         # Cookies are memory-only by default, so logins would be lost on every
         # restart. Persist them for normal windows (private windows use the
@@ -2493,7 +2391,7 @@ class BharatBrowserWindow(Gtk.Window):
         # one, but current WebKitGTK (2.4x+) has deprecated it and treats it as
         # identical to ALWAYS (logs a warning and changes nothing), so there's
         # no real per-tab saving available at this settings layer today.
-        # GPU Acceleration toggle (Settings > Performance): when on, page
+        # GPU acceleration (gpu_acceleration_enabled in settings.json): when on, page
         # compositing/canvas/WebGL are rendered on the GPU instead of raster
         # buffers in system RAM, which is the actual memory saving here (not
         # the always-on WEBKIT_FORCE_COMPOSITING_MODE env var above, which is
@@ -2763,6 +2661,18 @@ class BharatBrowserWindow(Gtk.Window):
         self.overlay.add_overlay(self.zoom_indicator)
         self._zoom_indicator_hide_source = None
 
+        # Fullscreen notice: a page in fullscreen can draw anything, a fake address bar included, so say which
+        # site it is and how to leave, as other browsers do.
+        self.fullscreen_notice = Gtk.Label()
+        self.fullscreen_notice.get_style_context().add_class("zoom-indicator")
+        self.fullscreen_notice.set_halign(Gtk.Align.CENTER)
+        self.fullscreen_notice.set_valign(Gtk.Align.START)
+        self.fullscreen_notice.set_margin_top(24)
+        self.fullscreen_notice.set_no_show_all(True)
+        self.fullscreen_notice.hide()
+        self.overlay.add_overlay(self.fullscreen_notice)
+        self._fullscreen_notice_source = None
+
         # First-Run Greeting — shown once ever (never in private windows),
         # auto-hidden after 2 seconds.
         self.greeting_banner = Gtk.Label()
@@ -2877,32 +2787,35 @@ class BharatBrowserWindow(Gtk.Window):
         except Exception as e:
             print("Memory monitor note:", e)
 
-    def _cleanup_stale_chromium_artifacts(self):
-        stale_dirs = [
-            "GPUCache", "DawnWebGPUCache", "DawnGraphiteCache",
-            "Shared Dictionary", "Code Cache", "Crashpad",
-            "Trust Tokens", "WebStorage", "blob_storage", "DIPS"
-        ]
-        for d in stale_dirs:
-            target = os.path.join(CONFIG_DIR, d)
-            if os.path.isdir(target):
-                try:
-                    shutil.rmtree(target, ignore_errors=True)
-                except Exception:
-                    pass
-        try:
-            for item in os.listdir(CONFIG_DIR):
-                if item.startswith(".org.chromium"):
-                    target = os.path.join(CONFIG_DIR, item)
-                    try:
-                        os.remove(target)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+    # Left in the profile folder by the old Chromium-based version of the browser. WebKit never reads them (its
+    # own files there are lower-case: cookies.sqlite, localstorage, storage, ...), but they still hold that
+    # version's cookies, logins and site data, which "Clear history on exit" can't reach.
+    STALE_CHROMIUM_ARTIFACTS = (
+        "GPUCache", "DawnWebGPUCache", "DawnGraphiteCache", "Shared Dictionary", "Code Cache", "Crashpad",
+        "WebStorage", "blob_storage", "Cache", "Dictionaries", "File System", "IndexedDB", "Local Storage",
+        "Service Worker", "Session Storage", "Cookies", "Cookies-journal", "DIPS", "DIPS-journal", "Local State",
+        "Network Persistent State", "Preferences", "SharedStorage", "SharedStorage-wal", "TransportSecurity",
+        "Trust Tokens", "Trust Tokens-journal",
+    )
 
-    def _detect_gpu_info_async(self):
-        self.gpu_info_label = detect_gpu_info()
+    @staticmethod
+    def _cleanup_stale_chromium_artifacts(config_dir=None):
+        config_dir = config_dir or CONFIG_DIR
+        try:
+            names = os.listdir(config_dir)
+        except OSError:
+            return
+        for name in names:
+            if name not in BharatBrowserWindow.STALE_CHROMIUM_ARTIFACTS and not name.startswith(".org.chromium"):
+                continue
+            target = os.path.join(config_dir, name)
+            try:
+                if os.path.isdir(target) and not os.path.islink(target):
+                    shutil.rmtree(target, ignore_errors=True)
+                else:
+                    os.remove(target)
+            except OSError:
+                pass
 
     def on_low_memory_warning(self, monitor, level):
         print(f"Low-memory warning (level={level}), trimming caches.")
@@ -3484,13 +3397,18 @@ class BharatBrowserWindow(Gtk.Window):
         webview._bharat_filter_on = self.content_filter is not None
 
         # 1. Media Codec Polyfill, 1b. Anti-Fingerprinting Farbling Engine,
-        # 2. Smart Link Prefetching — shared, pre-built instances (see __init__)
-        ucm.add_script(self.media_script)
-        ucm.add_script(self.farbling_script)
-        ucm.add_script(self.prefetch_script)
-        if self.typed_text_script is not None and not getattr(ucm, "_bharat_typed_ready", False):
-            ucm._bharat_typed_ready = True  # popups share their opener's manager
-            ucm.add_script(self.typed_text_script)
+        # 2. Smart Link Prefetching — shared, pre-built instances (see __init__).
+        # Once per manager: popups share their opener's, and a script added twice runs twice on every page.
+        if not getattr(ucm, "_bharat_scripts_ready", False):
+            ucm._bharat_scripts_ready = True
+            ucm.add_script(self.media_script)
+            ucm.add_script(self.farbling_script)
+            # Private windows don't warm up connections to links you only hover: that would tell those
+            # sites (and the DNS server) what you looked at without opening it.
+            if not self.is_private:
+                ucm.add_script(self.prefetch_script)
+            if self.typed_text_script is not None:
+                ucm.add_script(self.typed_text_script)
         if self.dark_mode_active:
             self._set_dark_stylesheet(ucm, True)
 
@@ -3622,7 +3540,26 @@ class BharatBrowserWindow(Gtk.Window):
         self.statusbar.hide()
         self._fullscreen = True
         self._apply_hardware_acceleration_policy()
+        self._show_fullscreen_notice(site_host_of(webview.get_uri()) or "This page")
         return False
+
+    FULLSCREEN_NOTICE_SECONDS = 4
+
+    def _show_fullscreen_notice(self, host):
+        self._hide_fullscreen_notice()
+        self.fullscreen_notice.set_text(f"{host} is now full screen  ·  Press Esc to exit")
+        self.fullscreen_notice.show()
+        def expire():
+            self._fullscreen_notice_source = None
+            self.fullscreen_notice.hide()
+            return False
+        self._fullscreen_notice_source = GLib.timeout_add_seconds(self.FULLSCREEN_NOTICE_SECONDS, expire)
+
+    def _hide_fullscreen_notice(self):
+        if self._fullscreen_notice_source is not None:
+            GLib.source_remove(self._fullscreen_notice_source)
+            self._fullscreen_notice_source = None
+        self.fullscreen_notice.hide()
 
     def on_webview_leave_fullscreen(self, webview):
         self.top_bar.show()
@@ -3630,6 +3567,7 @@ class BharatBrowserWindow(Gtk.Window):
         self.statusbar.show()
         self._fullscreen = False
         self._apply_hardware_acceleration_policy()
+        self._hide_fullscreen_notice()
         return False
 
     def print_active_page(self):
@@ -4420,9 +4358,6 @@ class BharatBrowserWindow(Gtk.Window):
         if ctrl and shift and event.keyval in (Gdk.KEY_t, Gdk.KEY_T):
             self.reopen_closed_tab()
             return True
-        if ctrl and alt and event.keyval in (Gdk.KEY_r, Gdk.KEY_R):
-            self.toggle_reader_mode()
-            return True
         if event.keyval == Gdk.KEY_F12 or (ctrl and shift and event.keyval in (Gdk.KEY_i, Gdk.KEY_I)):
             self.toggle_inspector()
             return True
@@ -4671,12 +4606,34 @@ class BharatBrowserWindow(Gtk.Window):
     def on_download_decide_destination(self, download, suggested_filename, entry):
         downloads_dir = self.get_downloads_dir()
         req = download.get_request()
-        target_path = self.unique_download_path(
-            downloads_dir, download_filename(suggested_filename, (req.get_uri() if req else "") or ""))
+        source = (req.get_uri() if req else "") or ""
+        filename = download_filename(suggested_filename, source)
+        if is_risky_download(filename) and not self._confirm_risky_download(filename, source):
+            entry["filename"], entry["status"] = filename, "Cancelled"
+            download.cancel()
+            self.statusbar.push(self.context_id, f"🛑 Download cancelled: {filename}")
+            return True
+        target_path = self.unique_download_path(downloads_dir, filename)
         download.set_destination(GLib.filename_to_uri(target_path))
         entry["filename"], entry["path"] = os.path.basename(target_path), target_path
         self.statusbar.push(self.context_id, f"📥 Download Started: {entry['filename']} -> {downloads_dir}")
         return True
+
+    def _confirm_risky_download(self, filename, source):
+        dialog = Gtk.MessageDialog(
+            transient_for=self, modal=True, destroy_with_parent=True,
+            message_type=Gtk.MessageType.WARNING, buttons=Gtk.ButtonsType.NONE,
+            text=f"Save {filename}?")
+        dialog.get_style_context().add_class("bharat-dialog")
+        dialog.format_secondary_text(
+            f"This kind of file can run programs or install software on your computer. Save it only if you "
+            f"meant to download it and trust where it came from:\n{site_host_of(source) or source}")
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Save", Gtk.ResponseType.ACCEPT)
+        dialog.set_default_response(Gtk.ResponseType.CANCEL)
+        response = dialog.run()
+        dialog.destroy()
+        return response == Gtk.ResponseType.ACCEPT
 
     def on_download_finished(self, entry, download=None):
         # WebKit emits "finished" after "failed" as well.
@@ -4692,6 +4649,8 @@ class BharatBrowserWindow(Gtk.Window):
         self.statusbar.push(self.context_id, f"✅ Download Completed: {entry['filename']}")
 
     def on_download_failed(self, entry, error):
+        if entry["status"] == "Cancelled":
+            return  # we cancelled it ourselves; WebKit reports that as a failure
         entry["status"] = "Failed ❌"
         self.statusbar.push(self.context_id, f"❌ Download Failed: {entry['filename']} ({getattr(error, 'message', error)})")
 
@@ -5035,7 +4994,7 @@ class BharatBrowserWindow(Gtk.Window):
             print("DNS prefetch note:", e)
 
     def on_mouse_target_changed(self, webview, hit_test_result, modifiers):
-        if not hit_test_result.context_is_link():
+        if self.is_private or not hit_test_result.context_is_link():
             return
         uri = hit_test_result.get_link_uri() or ""
         parsed = urllib.parse.urlparse(uri)
@@ -5338,6 +5297,8 @@ class BharatBrowserWindow(Gtk.Window):
             if host:
                 self._apply_site_policy(webview, host)
         if load_event == WebKit2.LoadEvent.STARTED:
+            if self._infobar is not None and getattr(self._infobar, "_bharat_fill_for", None) is webview:
+                self._clear_infobar()
             self._fill_offered = {k for k in self._fill_offered if k[0] != id(webview)}
             webview._bharat_pending_fill = None
             # Until the new page commits, get_tls_info() still describes the previous one.
@@ -5604,7 +5565,7 @@ class BharatBrowserWindow(Gtk.Window):
     def build_settings_dialog(self, page=None):
         """The Settings window: a sidebar of pages, each a column of titled cards.
         `page` is the stack name to open on (general, privacy, data, performance,
-        advanced, about). Every switch is also kept in dialog._bharat_controls,
+        about). Every switch is also kept in dialog._bharat_controls,
         keyed by the setting it changes."""
         dialog = Gtk.Dialog(title="Settings", transient_for=self, modal=True, destroy_with_parent=True)
         dialog.get_style_context().add_class("bharat-dialog")
@@ -5779,8 +5740,6 @@ class BharatBrowserWindow(Gtk.Window):
             switch("spellcheck_enabled", "✍️", "Check spelling while typing",
                    "Underlines misspelled words in text boxes, using the dictionaries installed on your system.",
                    self.on_spellcheck_toggled),
-            self._settings_row("📖", "Reader mode",
-                               "Press Ctrl+Alt+R on an article for a clean page with adjustable text size and themes."),
         )
 
         # --- Privacy & Security ---------------------------------------------
@@ -5927,24 +5886,6 @@ class BharatBrowserWindow(Gtk.Window):
                                       "Open", lambda: close_then(self.open_tab_memory)),
         )
 
-        # --- Advanced ---------------------------------------------------------
-        adv = add_page("advanced", "🛠️  Advanced", "Advanced",
-                       "Settings most people never need to change.")
-        self._settings_section(
-            adv, "GRAPHICS",
-            switch("gpu_acceleration_enabled", "🎮", "Use hardware acceleration",
-                   "Draws pages, canvas and WebGL on the GPU. Turn off if pages look broken or the computer "
-                   "freezes; software drawing uses more CPU and RAM. Takes full effect after a restart.",
-                   self.on_gpu_acceleration_toggled),
-            self._settings_row("🖥️", "Detected graphics", self.gpu_info_label),
-        )
-        self._settings_section(
-            adv, "DEVELOPERS",
-            switch("dev_tools_enabled", "🧰", "Developer tools",
-                   "Adds Inspect Element to the right-click menu for debugging web pages.",
-                   self.on_devtools_toggled),
-        )
-
         # --- About ------------------------------------------------------------
         about = add_page("about", "ℹ️  About", "About",
                          "A tiny, privacy-first browser for Linux, built on WebKitGTK. Made in India.")
@@ -6028,11 +5969,6 @@ class BharatBrowserWindow(Gtk.Window):
         self.passwords_enabled = active
         self.save_settings()
 
-    def on_devtools_toggled(self, active):
-        self.dev_tools_enabled = active
-        self.web_settings.set_enable_developer_extras(active)
-        self.save_settings()
-
     def on_low_memory_mode_toggled(self, active):
         self.low_memory_mode = active
         self.save_settings()
@@ -6057,18 +5993,6 @@ class BharatBrowserWindow(Gtk.Window):
         self.web_settings.set_enable_webrtc(active)
         self.web_settings.set_enable_media_stream(active)
         self.save_settings()
-
-    def on_gpu_acceleration_toggled(self, active):
-        self.gpu_acceleration_enabled = active
-        self._apply_hardware_acceleration_policy()
-        if hasattr(self.web_settings, 'set_enable_2d_canvas_acceleration'):
-            self.web_settings.set_enable_2d_canvas_acceleration(active)
-        self.save_settings()
-        self.statusbar.push(
-            self.context_id,
-            "🎮 GPU Acceleration " + ("enabled" if active else "disabled — using software rendering")
-            + " (restart the browser for it to take full effect)"
-        )
 
     # ------------------------------------------------------------------
     # Per-site policy: ad blocking, JavaScript and zoom remembered per host
@@ -6145,18 +6069,48 @@ class BharatBrowserWindow(Gtk.Window):
     # Permissions (camera/mic, location, notifications) with "remember"
     # ------------------------------------------------------------------
     @staticmethod
-    def _permission_kind(request):
+    def _describe_permission(request):
+        """(kind, what) for a permission request: `kind` is the key a choice is remembered under (None: asked
+        every time), `what` completes "Allow <site> to ...". (None, None) means refuse without asking: requests
+        nobody can judge from a prompt, or with nothing behind them in this browser."""
         if isinstance(request, WebKit2.UserMediaPermissionRequest):
-            return "media"
+            if WebKit2.user_media_permission_is_for_display_device(request):
+                return None, "see and share your screen"
+            audio = WebKit2.user_media_permission_is_for_audio_device(request)
+            video = WebKit2.user_media_permission_is_for_video_device(request)
+            return "media", ("use your camera and microphone" if audio and video
+                             else "use your camera" if video else "use your microphone")
         if isinstance(request, WebKit2.GeolocationPermissionRequest):
-            return "location"
+            return "location", "know your location"
         if isinstance(request, WebKit2.NotificationPermissionRequest):
-            return "notifications"
-        return None
+            return "notifications", "show you notifications"
+        if isinstance(request, WebKit2.MediaKeySystemPermissionRequest):
+            return "drm", "play protected (DRM) video and audio"
+        if isinstance(request, WebKit2.ClipboardPermissionRequest):
+            return None, "read what you copied to the clipboard"
+        if isinstance(request, WebKit2.WebsiteDataAccessPermissionRequest):
+            return None, (f"let {request.get_requesting_domain()} use its cookies and saved data "
+                          f"while you're on {request.get_current_domain()}")
+        return None, None
 
     def on_permission_request(self, webview, request):
         host = site_host_of(webview.get_uri())
-        kind = self._permission_kind(request)
+        # Names of camera and microphone devices: only for a site already allowed to use them.
+        if isinstance(request, WebKit2.DeviceInfoPermissionRequest):
+            request.allow() if get_site_permission(self.site_settings, host, "media") == "allow" else request.deny()
+            return True
+        # Pointer lock hides the mouse pointer (games, 3D viewers); Esc always gives it back.
+        if isinstance(request, WebKit2.PointerLockPermissionRequest):
+            if webview is self.get_active_webview():
+                request.allow()
+                self.statusbar.push(self.context_id, f"🖱️ {host or 'This page'} hid the mouse pointer. Press Esc to get it back")
+            else:
+                request.deny()
+            return True
+        kind, what = self._describe_permission(request)
+        if what is None:
+            request.deny()
+            return True
         remembered = get_site_permission(self.site_settings, host, kind) if kind and host else None
         if remembered == "allow":
             request.allow()
@@ -6165,18 +6119,16 @@ class BharatBrowserWindow(Gtk.Window):
             request.deny()
             return True
 
-        what = {"media": "camera/microphone access", "location": "your location",
-                "notifications": "notifications"}.get(kind, "a permission")
         dialog = Gtk.MessageDialog(
             transient_for=self,
             modal=True,
             destroy_with_parent=True,
             message_type=Gtk.MessageType.QUESTION,
             buttons=Gtk.ButtonsType.YES_NO,
-            text=f"Allow {what}?"
+            text=f"Allow {host or 'this page'} to {what}?"
         )
         dialog.get_style_context().add_class("bharat-dialog")
-        dialog.format_secondary_text(webview.get_uri() or "This site")
+        dialog.format_secondary_text(webview.get_uri() or "")
         remember_chk = None
         if kind and host:
             remember_chk = Gtk.CheckButton(label=f"Remember my choice for {host}")
@@ -6532,28 +6484,6 @@ td.c{{text-align:right;color:#cbd5e1;width:70px}}td.b{{width:30%}}td.b span{{dis
         return True
 
     # ------------------------------------------------------------------
-    # Reader mode
-    # ------------------------------------------------------------------
-    def toggle_reader_mode(self):
-        webview = self.get_active_webview()
-        uri = (webview.get_uri() or "") if webview else ""
-        if not uri.startswith(("http://", "https://", "file://")):
-            self.statusbar.push(self.context_id, "📖 Reader mode works on web pages")
-            return
-        webview.run_javascript(READER_MODE_JS, None, self._on_reader_result, None)
-
-    def _on_reader_result(self, webview, result, user_data):
-        try:
-            value = webview.run_javascript_finish(result).get_js_value().to_string()
-        except Exception as e:
-            self.statusbar.push(self.context_id, f"📖 Reader mode unavailable on this page ({e})")
-            return
-        if value == "no-article":
-            self.statusbar.push(self.context_id, "📖 No readable article found on this page")
-        elif value == "opened":
-            self.statusbar.push(self.context_id, "📖 Reader mode on — press Esc to close")
-
-    # ------------------------------------------------------------------
     # Main menu (the ☰ button) and the per-site popover (lock icon)
     # ------------------------------------------------------------------
     def show_main_menu(self, button):
@@ -6577,7 +6507,6 @@ td.c{{text-align:right;color:#cbd5e1;width:70px}}td.b{{width:30%}}td.b span{{dis
         item("Reopen Closed Tab  (Ctrl+Shift+T)", self.reopen_closed_tab, bool(self._closed_tabs))
         item("Tab Memory…", self.open_tab_memory)
         sep()
-        item("Reader Mode  (Ctrl+Alt+R)", self.toggle_reader_mode)
         item("Print…  (Ctrl+P)", self.print_active_page)
         item("Find in Page  (Ctrl+F)", self.open_find_bar)
         zoom_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
@@ -6690,10 +6619,6 @@ td.c{{text-align:right;color:#cbd5e1;width:70px}}td.b{{width:30%}}td.b span{{dis
                 prow.pack_end(pbtn, False, False, 0)
                 box.pack_start(prow, False, False, 0)
 
-        reader = Gtk.Button(label="📖 Reader mode")
-        reader.get_style_context().add_class("settings-action-btn")
-        reader.connect("clicked", lambda _b: (popover.popdown(), self.toggle_reader_mode()))
-        box.pack_start(reader, False, False, 2)
         popover.add(box)
         box.show_all()
         popover.popup()
@@ -6760,6 +6685,7 @@ td.c{{text-align:right;color:#cbd5e1;width:70px}}td.b{{width:30%}}td.b span{{dis
         bar.show_all()
         self._infobar = bar
         GLib.timeout_add_seconds(timeout, self._clear_infobar, bar)
+        return bar
 
     # ------------------------------------------------------------------
     # Import bookmarks / history
@@ -6957,17 +6883,24 @@ td.c{{text-align:right;color:#cbd5e1;width:70px}}td.b{{width:30%}}td.b span{{dis
             combo.set_active(0)
 
         def fill():
+            # The bar stays up for a while: by now the tab may show another site, which must not get this password.
+            if site_host_of(webview.get_uri()) != host or not getattr(webview, "_bharat_committed", True):
+                self.statusbar.push(self.context_id, f"🔑 Not filled: this tab is no longer on {host}")
+                return
             login = logins[combo.get_active() if combo else 0]
             password = self.secrets.get_password(login["item"])
             if password is None:
                 self.statusbar.push(self.context_id, "❌ Couldn't read the saved password")
                 return
             script = PASSWORD_FILL_JS % (json.dumps(login["username"]), json.dumps(password))
-            webview.run_javascript(script, None, None, None)
+            # In the isolated world the page can't hook the value setters or DOM lookups the fill uses. The
+            # input/change events still reach the page, so sites built with React and the like see the text.
+            webview.run_javascript_in_world(script, "bharat-pw", None, None, None)
 
         who = logins[0]["username"] or "your saved login"
-        self._show_infobar(f"🔑 Fill {who if len(logins) == 1 else 'a saved login'} for {host}?",
-                           [("Fill", fill), ("Not now", None)], extra=combo)
+        bar = self._show_infobar(f"🔑 Fill {who if len(logins) == 1 else 'a saved login'} for {host}?",
+                                 [("Fill", fill), ("Not now", None)], extra=combo)
+        bar._bharat_fill_for = webview  # closed when this tab starts loading another page
 
     def open_password_manager(self, parent=None):
         dialog, area = self._make_dialog("Saved passwords", parent, 560, 420)

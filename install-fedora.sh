@@ -159,8 +159,11 @@ if [ -d "assets" ]; then
     $CMD_PREFIX cp -r assets/* "$INSTALL_DIR/assets/"
 fi
 
-# Create launcher script wrapper
-cat << 'EOF' > /tmp/bharat-browser-launcher
+# Create launcher script wrapper. Staged in a private temp folder: a fixed /tmp name could be swapped by
+# another local user before the copy below, which runs as root for a system-wide install.
+STAGE_DIR="$(mktemp -d)"
+trap 'rm -rf "$STAGE_DIR"' EXIT
+cat << 'EOF' > "$STAGE_DIR/bharat-browser-launcher"
 #!/bin/bash
 SCRIPT_PATH="$(readlink -f "$0")"
 BIN_DIR="$(dirname "$SCRIPT_PATH")"
@@ -176,16 +179,18 @@ if [ -f "${HOME}/.local/share/bharat-browser/bharat_browser.py" ]; then
 elif [ -f "/usr/share/bharat-browser/bharat_browser.py" ]; then
     run /usr/share/bharat-browser "$@"
 else
-    run . "$@"
+    echo "bharat-browser: no installed copy found in ~/.local/share/bharat-browser or /usr/share/bharat-browser." >&2
+    echo "Reinstall Bharat Browser from https://github.com/Sangam1112/bharat-browser/releases" >&2
+    exit 1
 fi
 EOF
-chmod +x /tmp/bharat-browser-launcher
-$CMD_PREFIX cp /tmp/bharat-browser-launcher "$BIN_DIR/bharat-browser"
+chmod +x "$STAGE_DIR/bharat-browser-launcher"
+$CMD_PREFIX cp "$STAGE_DIR/bharat-browser-launcher" "$BIN_DIR/bharat-browser"
 $CMD_PREFIX chmod +x "$BIN_DIR/bharat-browser" "$INSTALL_DIR/bharat_browser.py"
 
 echo "[3/4] Registering desktop shortcut..."
-sed "s|Exec=bharat-browser|Exec=${BIN_DIR}/bharat-browser|g" bharat-browser.desktop > /tmp/bharat-browser.desktop
-$CMD_PREFIX cp /tmp/bharat-browser.desktop "$DESKTOP_DIR/bharat-browser.desktop"
+sed "s|Exec=bharat-browser|Exec=${BIN_DIR}/bharat-browser|g" bharat-browser.desktop > "$STAGE_DIR/bharat-browser.desktop"
+$CMD_PREFIX cp "$STAGE_DIR/bharat-browser.desktop" "$DESKTOP_DIR/bharat-browser.desktop"
 
 if [ -f "assets/bharat_icon.png" ]; then
     $CMD_PREFIX cp assets/bharat_icon.png "$ICON_DIR/bharat-browser.png"

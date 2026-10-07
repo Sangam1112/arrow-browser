@@ -67,9 +67,29 @@ class UrlHelperTests(unittest.TestCase):
         f = bb.download_filename
         self.assertEqual(f("Report 2026.pdf", "https://x.com/dl?id=7"), "Report 2026.pdf")
         self.assertEqual(f("", "https://x.com/files/My%20File.zip"), "My File.zip", "address part is decoded")
-        self.assertEqual(f("../../etc/passwd"), ".._.._etc_passwd", "never a path")
+        self.assertEqual(f("../../etc/passwd"), "_.._etc_passwd", "never a path")
         self.assertEqual(f("", "https://x.com/"), "download")
         self.assertEqual(f("..", ""), "download")
+        self.assertEqual(f(".profile"), "profile", "never a hidden file")
+        self.assertEqual(f("bad\nname\x07.txt"), "badname.txt", "no control characters")
+
+    def test_old_chromium_profile_data_is_removed_and_webkit_data_kept(self):
+        d = tempfile.mkdtemp()
+        try:
+            for name in ("Cookies", "Trust Tokens", "DIPS", "cookies.sqlite", "settings.json"):
+                open(os.path.join(d, name), "w").close()
+            for name in ("IndexedDB/https_x.com_0.indexeddb.leveldb", "Local Storage/leveldb", "localstorage", "storage"):
+                os.makedirs(os.path.join(d, name))
+            bb.BharatBrowserWindow._cleanup_stale_chromium_artifacts(d)
+            self.assertEqual(sorted(os.listdir(d)), ["cookies.sqlite", "localstorage", "settings.json", "storage"])
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_risky_downloads(self):
+        for name in ("invoice.pdf.desktop", "setup.SH", "app.AppImage", "x.deb", "run.py"):
+            self.assertTrue(bb.is_risky_download(name), name)
+        for name in ("report.pdf", "photo.jpg", "archive.zip", "notes.txt", "desktop"):
+            self.assertFalse(bb.is_risky_download(name), name)
 
     def test_homepage_rejects_dangerous_schemes(self):
         for bad in ("javascript:alert(1)", "data:text/html,x", "file:///etc/passwd", ""):
@@ -568,6 +588,12 @@ class UpdateInfoTests(unittest.TestCase):
             data, calls = self._run([first, (200, b'{"version": "1.2.3"}')])
             self.assertEqual(data["version"], "1.2.3")
             self.assertIn("raw.githubusercontent.com", calls[1][0])
+
+    def test_version_must_be_plain_numbers(self):
+        # it goes into the download address and on-screen markup
+        for bad in (b'{"version": "../main"}', b'{"version": "1.2.3<b>"}', b'{"version": "1.2"}'):
+            with self.assertRaises(ValueError):
+                self._run([(200, bad), (200, bad)])
 
     def test_raises_when_every_source_fails(self):
         with self.assertRaises(OSError):

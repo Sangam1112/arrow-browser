@@ -18,11 +18,15 @@ python3 tools/check-version.py
 VERSION="$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')"
 PKG_NAME="bharat-browser"
 OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Downloads}"
-BUILD_ROOT="/tmp/deb_build_${PKG_NAME}"
+# A fresh private folder (not a fixed /tmp name another local user could create or swap first), made
+# world-readable like the package tree it holds.
+BUILD_ROOT="$(mktemp -d)"
+DEB_ROOT="$(mktemp -d)"
+chmod 755 "$BUILD_ROOT"
+trap 'rm -rf "$BUILD_ROOT" "$DEB_ROOT"' EXIT
 
 echo "Building .deb package for ${PKG_NAME} v${VERSION}..."
 
-rm -rf "$BUILD_ROOT"
 mkdir -p "${BUILD_ROOT}/usr/share/bharat-browser/assets"
 mkdir -p "${BUILD_ROOT}/usr/bin"
 mkdir -p "${BUILD_ROOT}/usr/share/applications"
@@ -73,9 +77,6 @@ exit 0
 EOF
 chmod 755 "${BUILD_ROOT}/DEBIAN/postinst" "${BUILD_ROOT}/DEBIAN/prerm"
 
-DEB_ROOT="/tmp/deb_pkg_${PKG_NAME}"
-rm -rf "$DEB_ROOT"
-mkdir -p "$DEB_ROOT"
 
 echo "2.0" > "${DEB_ROOT}/debian-binary"
 

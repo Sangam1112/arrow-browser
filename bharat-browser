@@ -15,5 +15,7 @@ elif [ -f "/usr/share/bharat-browser/bharat_browser.py" ]; then
 elif [ -f "${SCRIPT_DIR}/bharat_browser.py" ]; then
     run "${SCRIPT_DIR}" "$@"
 else
-    run . "$@"
+    echo "bharat-browser: no installed copy found in ~/.local/share/bharat-browser or /usr/share/bharat-browser." >&2
+    echo "Reinstall Bharat Browser from https://github.com/Sangam1112/bharat-browser/releases" >&2
+    exit 1
 fi
