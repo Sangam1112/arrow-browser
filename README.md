@@ -6,15 +6,15 @@
 
 <p><b>A tiny, fast, privacy-first web browser for Linux.<br>Built on WebKitGTK.</b></p>
 
-<p><i>Formerly Bharat Browser. Installed copies update to Arrow Browser by themselves and keep their settings, history and saved passwords.</i></p>
+<p><i>Formerly Bharat Browser (up to v1.5.19). Installed copies update to Arrow Browser by themselves and keep their settings, history and saved passwords. <a href="#coming-from-bharat-browser">More</a></i></p>
 
 [![Latest release](https://img.shields.io/github/v/release/Sangam1112/arrow-browser?label=release&color=blue)](https://github.com/Sangam1112/arrow-browser/releases/latest)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian%20%7C%20Fedora%20%7C%20RHEL%20family%20%7C%20WSL2-orange.svg)](#-install)
-[![Installer](https://img.shields.io/badge/installer-~104%20KB-brightgreen.svg)](#-small-by-design)
+[![Installer](https://img.shields.io/badge/installer-~120%20KB-brightgreen.svg)](#-small-by-design)
 [![Updates](https://img.shields.io/badge/updates-signed%20(Ed25519)-6366f1.svg)](#-keeping-it-up-to-date)
 
-[**Highlights**](#-highlights) · [**Benchmarks**](#-benchmarks-vs-ungoogled-chromium) · [**Screenshots**](#-screenshots) · [**Install**](#-install) · [**Update**](#-keeping-it-up-to-date) · [**Shortcuts**](#-keyboard-shortcuts) · [**Privacy**](#-privacy--what-it-connects-to)
+[**Highlights**](#-highlights) · [**Benchmarks**](#-benchmarks-vs-ungoogled-chromium) · [**Install**](#-install) · [**Update**](#-keeping-it-up-to-date) · [**Shortcuts**](#-keyboard-shortcuts) · [**Privacy**](#-privacy--what-it-connects-to)
 
 </div>
 
@@ -24,8 +24,8 @@
 
 <table>
   <tr>
-    <td width="25%" valign="top"><h3>🪶 Tiny</h3>A ~104 KB installer. It uses the WebKitGTK already on your system instead of shipping its own 150 MB engine.</td>
-    <td width="25%" valign="top"><h3>🛡️ Private</h3>Tracker blocking, HTTPS upgrades and cookie protection work from the very first launch.</td>
+    <td width="25%" valign="top"><h3>🪶 Tiny</h3>A ~120 KB installer. It uses the WebKitGTK already on your system instead of shipping its own 150 MB engine.</td>
+    <td width="25%" valign="top"><h3>🛡️ Private</h3>Tracker blocking, HTTPS upgrades, cookie protection and a sandbox for every page work from the very first launch.</td>
     <td width="25%" valign="top"><h3>⚡ Light</h3>Built to stay comfortable on older PCs: it sleeps unused tabs and trims its own memory.</td>
     <td width="25%" valign="top"><h3>🔐 Trustworthy</h3>Signed updates, passwords in your system keyring, and no telemetry at all.</td>
   </tr>
@@ -41,15 +41,22 @@ It is a native GTK3 desktop app, not a repackaged Chromium or Electron. The ad b
 - **Blocks trackers and ads out of the box**, refreshed weekly from EasyList and EasyPrivacy, with a safety list so sign-in pages and captchas keep working.
 - **Cleans links**: removes `utm_*`, `fbclid` and hundreds of site-specific tracking tags (ClearURLs rules) and skips tracking redirects such as `google.com/url?q=`.
 - **HTTPS-only warning**: if a site can't be reached securely, *you* decide whether to continue over HTTP. There is no silent downgrade.
-- **Per-site controls** from the 🔒 icon: ads, JavaScript, zoom and camera/location/notification permissions, remembered site by site.
+- **Per-site controls** from the 🔒 icon: ads, JavaScript, zoom and camera/location/notification permissions, remembered site by site. Permission prompts say exactly what a site is asking for.
 - **Passwords stay in your system keyring** (GNOME Keyring, KWallet or KeePassXC), never in the browser's own files, and only fill when you click.
 - **Leak and fingerprint protection**: third-party cookies blocked, WebRTC off by default (so it can't expose your IP), your real GPU details hidden from websites, and canvas and audio fingerprints given tiny per-site changes so they can't be used to recognise your computer.
 - **Privacy report** to see what was stopped, and **private windows** that write nothing to disk.
+
+**🔐 Secure by default**
+- **Every page runs in a sandbox** (bubblewrap): a site that exploits a bug in the web engine still can't reach your files.
+- **No click-through for bad certificates**, and the padlock is green only when the site's certificate was actually verified. Click it to see who issued the certificate.
+- **Downloads that can run programs** (`.desktop`, `.sh`, `.AppImage`, `.deb`, `.exe`, …) **ask first**. Nothing is saved as a hidden file.
+- **Fullscreen always says which site it is** and how to leave, so a page can't pass off a fake address bar.
 
 **🧭 Everyday touches**
 - **Pinned tabs** that survive restarts, plus a one-key way to reopen a closed tab.
 - **Tab Memory** (main menu): see which tab is using the most memory, then suspend or close it from the list.
 - **Switch in a minute**: import bookmarks and history from Firefox, Chrome, Brave, Edge, Vivaldi, Opera and more.
+- **Dark mode for websites** that darkens bright pages and leaves sites that are already dark alone.
 - **A friendly offline page** that reloads itself when you're back online, with a kite game while you wait 🪁.
 
 **🪶 Light on your computer**
@@ -68,39 +75,10 @@ Measured head-to-head on Linux under identical workloads (`example.com`, `wikipe
 | **Multi-Tab Workload (3 Tabs)** | **942 MB** | 1,235 MB (1.23 GB) | **~24% less RAM** |
 | **Processes Spawned (1 Tab)** | **9** | 13 | 30% fewer helper processes |
 | **Processes Spawned (3 Tabs)** | **11** | 15 | Lower scheduler contention |
-| **Package Installer Size** | **~104 KB** (`.deb`) | ~372 MB (Flatpak) | **~3,500× smaller package** |
+| **Package Installer Size** | **~117 KB** (`.deb`) | ~372 MB (Flatpak) | **~3,200× smaller package** |
 | **Installed Disk Footprint** | **~2.3 MB** | ~1.8 GB (with runtime) | **~780× less disk space** |
 
 > **Why the difference?** Arrow Browser leverages the system's native WebKitGTK engine already optimized for Linux, rather than bundling duplicate multi-process Chromium engines and heavy runtime containers. In addition, idle background tabs automatically sleep to keep long sessions responsive on older or resource-constrained hardware.
-
----
-
-## 📸 Screenshots
-
-<table>
-  <tr>
-    <td align="center"><b>Privacy report</b><br><img src="docs/screenshots/privacy-report.png" alt="Privacy report" width="400"></td>
-    <td align="center"><b>Password prompt &amp; pinned tab</b><br><img src="docs/screenshots/password-prompt.png" alt="Password prompt and a pinned tab" width="400"></td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2"><b>HTTPS-only warning</b><br><img src="docs/screenshots/https-warning.png" alt="HTTPS-only warning page" width="400"></td>
-  </tr>
-</table>
-
-<details>
-<summary><b>Settings</b> (6 pages)</summary>
-<br>
-<table>
-  <tr>
-    <td align="center"><b>General</b><br><img src="docs/screenshots/settings-general.png" alt="General settings" width="380"></td>
-    <td align="center"><b>Privacy &amp; Security</b><br><img src="docs/screenshots/settings-privacy.png" alt="Privacy and security settings" width="380"></td>
-  </tr>
-  <tr>
-    <td align="center"><b>Performance</b><br><img src="docs/screenshots/settings-performance.png" alt="Performance settings" width="380"></td>
-    <td align="center"><b>History &amp; Data</b><br><img src="docs/screenshots/settings-history-data.png" alt="History and data settings" width="380"></td>
-  </tr>
-</table>
-</details>
 
 ---
 
@@ -258,7 +236,7 @@ A **Arrow Browser** icon appears on your desktop. `wslg.exe` starts the browser 
 - *Blank or white window:* try `WEBKIT_DISABLE_DMABUF_RENDERER=1 arrow-browser`, a common workaround for WebKitGTK under WSLg.
 - *Saving passwords doesn't work:* the password manager needs a system keyring. Run `sudo apt install -y gnome-keyring`. Everything else works without it.
 
-> The WSL installer's logic is the same as the Ubuntu one, but it hasn't been tested on a real Windows machine yet. If you try it, please tell us how it went in [issues](https://github.com/Sangam1112/arrow-browser/issues).
+> Arrow Browser runs on Windows 11 through WSLg; the title bar has the usual minimize, maximize and close buttons there. The WSL installer itself has less testing than the Linux ones, so if something goes wrong, please tell us in [issues](https://github.com/Sangam1112/arrow-browser/issues).
 </details>
 
 ---
@@ -268,6 +246,15 @@ A **Arrow Browser** icon appears on your desktop. `wslg.exe` starts the browser 
 - **Source or user install:** open **Settings → About → Check for updates**. If a newer release exists it is downloaded, its signature is verified, and you just click **Restart now**. The browser also checks quietly about 30 seconds after launch.
 - **`.deb` / `.rpm` installs:** the same button works (updates go to `~/.local/share/arrow-browser`, which the launcher prefers), or install the newer package from the [Releases page](https://github.com/Sangam1112/arrow-browser/releases/latest).
 - A release that is **not signed by the project key is never installed**, even if the download itself were tampered with.
+
+### Coming from Bharat Browser
+
+Arrow Browser was called Bharat Browser up to v1.5.19. Nothing needs doing:
+
+- **It updates itself** to Arrow Browser, as usual. On its first start it moves to its new folders (`~/.config/arrow-browser`, `~/.cache/arrow-browser`, `~/.local/share/arrow-browser`) and keeps your settings, history, bookmarks, cookies and open tabs. A link is left at each old folder name.
+- **Saved passwords** are still found under the old name and move to the new one the next time you save them.
+- **The `bharat-browser` command keeps working.** Installing the new `.deb` or `.rpm` replaces the old `bharat-browser` package and brings the new icon and menu entry.
+- The old GitHub address forwards to this one.
 
 ## 🗑️ Uninstall
 
@@ -282,6 +269,9 @@ rm -rf ~/.local/share/arrow-browser ~/.local/bin/arrow-browser \
 
 # your data (history, bookmarks, settings, cookies) and cache
 rm -rf ~/.config/arrow-browser ~/.cache/arrow-browser
+
+# left behind by Bharat Browser (before 1.6.0), if you used it
+rm -rf ~/.config/bharat-browser ~/.cache/bharat-browser ~/.local/share/bharat-browser ~/.local/bin/bharat-browser
 ```
 
 Saved passwords are in your system keyring, not in those folders: remove them first from **Settings → Privacy & Security → Saved passwords**.
@@ -296,7 +286,7 @@ Saved passwords are in your system keyring, not in those folders: remove them fi
 | Close tab | `Ctrl+W` | Bookmark page | `Ctrl+D` |
 | Reopen closed tab | `Ctrl+Shift+T` | Bookmark manager | `Ctrl+Shift+O` |
 | Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` | History dashboard | `Ctrl+H` |
-| New private window | `Ctrl+Shift+N` | | |
+| New private window | `Ctrl+Shift+N` | Close find bar | `Esc` |
 | Focus address bar | `Ctrl+L` | Print / save as PDF | `Ctrl+P` |
 | Back / forward | `Alt+←` / `Alt+→` | Zoom in / out / reset | `Ctrl++` / `Ctrl+-` / `Ctrl+0` |
 | Reload | `F5` or `Ctrl+R` | Developer inspector* | `F12` or `Ctrl+Shift+I` |
@@ -314,7 +304,7 @@ Arrow Browser has **no telemetry, analytics or accounts**. Besides the sites you
 | Update check | `api.github.com`, `raw.githubusercontent.com` | ~30 s after launch, and when you click *Check for updates* | n/a (it only reads a small version file) |
 | Ad and tracker lists | `easylist.to` | About once a week | Settings → Privacy & Security → *Keep the block lists up to date* |
 | Link-cleaning rules | `rules2.clearurls.xyz` (or `gitlab.com` if that's down) | About once a week | Same switch |
-| Link / DNS prefetch | the pages you hover over | While browsing | n/a |
+| Link / DNS prefetch | the pages you hover over | While browsing (never in private windows) | n/a |
 
 **Where your data lives:** settings, history, bookmarks, session, per-site settings, cookies and statistics are in `~/.config/arrow-browser` (readable only by you); cache in `~/.cache/arrow-browser`; passwords only in your system keyring. Private windows write none of it to disk.
 
@@ -326,16 +316,16 @@ Spotted a security problem? Please open a [GitHub issue](https://github.com/Sang
 
 | Browser | Installer size | Installed size (approx.) |
 |---|---|---|
-| **Arrow Browser** | **~104 KB** (RPM) / **~90 KB** (.deb) | **~310 KB** |
+| **Arrow Browser** | **~129 KB** (RPM) / **~117 KB** (.deb) | **~390 KB** |
 | Google Chrome | ~90–100 MB | ~250–350 MB |
 | Mozilla Firefox | ~55–75 MB | ~200–300 MB |
 | Chromium | ~100–150 MB | ~300–400 MB |
 | Brave | ~90–110 MB | ~300+ MB |
 | Microsoft Edge (Linux) | ~90–100 MB | ~250–350 MB |
 
-That's roughly **500–1000× smaller**. Chrome, Firefox, Chromium, Brave and Edge each bundle a complete rendering engine (Blink + V8, or Gecko + SpiderMonkey), typically 150–250 MB on its own. Arrow Browser ships none of that: it's a ~295 KB Python/GTK3 program that calls into **WebKitGTK**, a system library most Linux desktops already have for other GTK apps, from the same engine family as Safari.
+That's roughly **500–1000× smaller**. Chrome, Firefox, Chromium, Brave and Edge each bundle a complete rendering engine (Blink + V8, or Gecko + SpiderMonkey), typically 150–250 MB on its own. Arrow Browser ships none of that: it's a ~340 KB Python/GTK3 program that calls into **WebKitGTK**, a system library most Linux desktops already have for other GTK apps, from the same engine family as Safari.
 
-> Arrow Browser's sizes were measured from the v1.5.1 release packages. The other browsers' figures are well-known public approximations that vary by version and platform.
+> Arrow Browser's sizes were measured from the v1.6.0 release packages. The other browsers' figures are well-known public approximations that vary by version and platform.
 
 ---
 
