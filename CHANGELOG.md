@@ -3,6 +3,11 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.5.18] - 2026-10-07
+
+### Fixed
+- **"Working on latest version" showed up even when the browser was out of date.** Every time the browser started, it showed that notice before checking anything, so an old copy said it was current. One running v1.4.5 under WSL on Windows claimed to be the latest version while v1.5.17 was out. The notice now appears only after an update check has actually run, and it says what that check found. Copies that already have the self-updater still updated themselves about 30 seconds after starting; only the notice was wrong.
+
 ## [1.5.17] - 2026-10-07
 
 A security release, from a review of the browser against the standards other browsers follow.
