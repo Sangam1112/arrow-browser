@@ -1,12 +1,12 @@
 #!/bin/bash
-# Installation script for Bharat Browser on Fedora Linux (System or User mode)
+# Installation script for Arrow Browser on Fedora Linux (System or User mode)
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "=========================================="
-echo "Installing Bharat Browser on Fedora Linux"
+echo "Installing Arrow Browser on Fedora Linux"
 echo "=========================================="
 echo "(Installs to ~/.local by default. Pass --system for a system-wide"
 echo " /usr install; you'll be prompted for sudo.)"
@@ -52,7 +52,7 @@ print_manual_instructions() {
     echo "" >&2
     echo "ERROR: $1" >&2
     echo "" >&2
-    echo "Bharat Browser needs these packages, which are not installed:" >&2
+    echo "Arrow Browser needs these packages, which are not installed:" >&2
     for pkg in $MISSING_PKGS; do
         echo "  - $pkg" >&2
     done
@@ -137,14 +137,14 @@ else
 fi
 
 if [ "$USE_SUDO" = true ]; then
-    INSTALL_DIR="/usr/share/bharat-browser"
+    INSTALL_DIR="/usr/share/arrow-browser"
     BIN_DIR="/usr/bin"
     DESKTOP_DIR="/usr/share/applications"
     ICON_DIR="/usr/share/icons/hicolor/256x256/apps"
     CMD_PREFIX="sudo"
 else
     echo "Installing in user local directory (~/.local)..."
-    INSTALL_DIR="${HOME}/.local/share/bharat-browser"
+    INSTALL_DIR="${HOME}/.local/share/arrow-browser"
     BIN_DIR="${HOME}/.local/bin"
     DESKTOP_DIR="${HOME}/.local/share/applications"
     ICON_DIR="${HOME}/.local/share/icons/hicolor/256x256/apps"
@@ -154,7 +154,7 @@ fi
 echo "[2/4] Copying application files..."
 $CMD_PREFIX mkdir -p "$INSTALL_DIR" "$INSTALL_DIR/assets" "$BIN_DIR" "$DESKTOP_DIR" "$ICON_DIR"
 
-$CMD_PREFIX cp bharat_browser.py "$INSTALL_DIR/"
+$CMD_PREFIX cp arrow_browser.py "$INSTALL_DIR/"
 if [ -d "assets" ]; then
     $CMD_PREFIX cp -r assets/* "$INSTALL_DIR/assets/"
 fi
@@ -163,37 +163,44 @@ fi
 # another local user before the copy below, which runs as root for a system-wide install.
 STAGE_DIR="$(mktemp -d)"
 trap 'rm -rf "$STAGE_DIR"' EXIT
-cat << 'EOF' > "$STAGE_DIR/bharat-browser-launcher"
+cat << 'EOF' > "$STAGE_DIR/arrow-browser-launcher"
 #!/bin/bash
 SCRIPT_PATH="$(readlink -f "$0")"
 BIN_DIR="$(dirname "$SCRIPT_PATH")"
 # Start through an import so Python reuses the compiled code it keeps in __pycache__: running
-# bharat_browser.py directly would recompile all of it on every launch (~0.25 s).
-run() { exec python3 -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("bharat_browser", run_name="__main__", alter_sys=True)' "$@"; }
+# arrow_browser.py directly would recompile all of it on every launch (~0.25 s).
+run() { exec python3 -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("arrow_browser", run_name="__main__", alter_sys=True)' "$@"; }
 
 # User-writable install checked first: it's the only copy the browser's
 # self-updater can actually rewrite in place. A root-owned /usr/share install
 # is left as a fallback for systems that only have the RPM installed.
-if [ -f "${HOME}/.local/share/bharat-browser/bharat_browser.py" ]; then
-    run "${HOME}/.local/share/bharat-browser" "$@"
-elif [ -f "/usr/share/bharat-browser/bharat_browser.py" ]; then
-    run /usr/share/bharat-browser "$@"
+if [ -f "${HOME}/.local/share/arrow-browser/arrow_browser.py" ]; then
+    run "${HOME}/.local/share/arrow-browser" "$@"
+elif [ -f "/usr/share/arrow-browser/arrow_browser.py" ]; then
+    run /usr/share/arrow-browser "$@"
 else
-    echo "bharat-browser: no installed copy found in ~/.local/share/bharat-browser or /usr/share/bharat-browser." >&2
-    echo "Reinstall Bharat Browser from https://github.com/Sangam1112/bharat-browser/releases" >&2
+    echo "arrow-browser: no installed copy found in ~/.local/share/arrow-browser or /usr/share/arrow-browser." >&2
+    echo "Reinstall Arrow Browser from https://github.com/Sangam1112/arrow-browser/releases" >&2
     exit 1
 fi
 EOF
-chmod +x "$STAGE_DIR/bharat-browser-launcher"
-$CMD_PREFIX cp "$STAGE_DIR/bharat-browser-launcher" "$BIN_DIR/bharat-browser"
-$CMD_PREFIX chmod +x "$BIN_DIR/bharat-browser" "$INSTALL_DIR/bharat_browser.py"
+chmod +x "$STAGE_DIR/arrow-browser-launcher"
+$CMD_PREFIX cp "$STAGE_DIR/arrow-browser-launcher" "$BIN_DIR/arrow-browser"
+$CMD_PREFIX chmod +x "$BIN_DIR/arrow-browser" "$INSTALL_DIR/arrow_browser.py"
 
 echo "[3/4] Registering desktop shortcut..."
-sed "s|Exec=bharat-browser|Exec=${BIN_DIR}/bharat-browser|g" bharat-browser.desktop > "$STAGE_DIR/bharat-browser.desktop"
-$CMD_PREFIX cp "$STAGE_DIR/bharat-browser.desktop" "$DESKTOP_DIR/bharat-browser.desktop"
+sed "s|Exec=arrow-browser|Exec=${BIN_DIR}/arrow-browser|g" arrow-browser.desktop > "$STAGE_DIR/arrow-browser.desktop"
+$CMD_PREFIX cp "$STAGE_DIR/arrow-browser.desktop" "$DESKTOP_DIR/arrow-browser.desktop"
 
-if [ -f "assets/bharat_icon.png" ]; then
-    $CMD_PREFIX cp assets/bharat_icon.png "$ICON_DIR/bharat-browser.png"
+if [ -f "assets/arrow_icon.png" ]; then
+    $CMD_PREFIX cp assets/arrow_icon.png "$ICON_DIR/arrow-browser.png"
+fi
+
+# Up to 1.5.19 this was Bharat Browser: drop its menu entry and icon, so the menu shows one browser, and
+# point its command at this one.
+$CMD_PREFIX rm -f "$DESKTOP_DIR/bharat-browser.desktop" "$ICON_DIR/bharat-browser.png"
+if [ -e "$BIN_DIR/bharat-browser" ] || [ -L "$BIN_DIR/bharat-browser" ]; then
+    $CMD_PREFIX ln -sf arrow-browser "$BIN_DIR/bharat-browser"
 fi
 
 echo "[4/4] Updating desktop environment databases..."
@@ -202,7 +209,7 @@ if command -v update-desktop-database &> /dev/null; then
 fi
 
 echo "=========================================="
-echo "Bharat Browser successfully installed!"
-echo "Binary location: ${BIN_DIR}/bharat-browser"
-echo "Launch by typing '${BIN_DIR}/bharat-browser' in terminal or via Application Menu."
+echo "Arrow Browser successfully installed!"
+echo "Binary location: ${BIN_DIR}/arrow-browser"
+echo "Launch by typing '${BIN_DIR}/arrow-browser' in terminal or via Application Menu."
 echo "=========================================="

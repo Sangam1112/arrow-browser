@@ -4,5 +4,5 @@
 set -e
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 python3 tools/check-version.py
-python3 -W ignore -m unittest tools.test_update_signature tools.test_bharat_diagnose
+python3 -W ignore -m unittest tools.test_update_signature tools.test_arrow_diagnose
 python3 -W ignore -m unittest discover -s tests

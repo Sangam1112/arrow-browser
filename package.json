@@ -1,5 +1,6 @@
 {
-  "name": "bharat-browser",
+  "name": "arrow-browser",
+  "license": "GPL-3.0-or-later",
   "version": "1.5.19",
   "sha256": "4214b008f468ff281341293dbc12472bcf06ca3a4957d0c85fdbe31b39191c03",
   "signature": "909a6338b9b8b90d66c1b3a7b61b7a0e82927086366d2440f7f2b64379b11a2b04d42cbec3a8dd61f2c6f87a9d1652e36964955a286f34b0f00e42597eac1800"

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Verify that the built .deb, .rpm and Fedora archive all carry the version in
-package.json: the package metadata AND the bharat_browser.py inside each one, which
+package.json: the package metadata AND the arrow_browser.py inside each one, which
 must also be byte-identical to the one in the repository (the signed file).
 
   tools/check-packages.py
@@ -18,10 +18,10 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 os.chdir(ROOT)
 with open("package.json") as f:
     VERSION = json.load(f)["version"]
-with open("bharat_browser.py", "rb") as f:
+with open("arrow_browser.py", "rb") as f:
     SOURCE = f.read()
 SOURCE_SHA = hashlib.sha256(SOURCE).hexdigest()
-APP = "usr/share/bharat-browser/bharat_browser.py"
+APP = "usr/share/arrow-browser/arrow_browser.py"
 problems = []
 
 
@@ -35,11 +35,11 @@ def check_app(label, data):
     if found != VERSION:
         problems.append(f"{label}: embedded app is {found}, expected {VERSION}")
     if hashlib.sha256(data).hexdigest() != SOURCE_SHA:
-        problems.append(f"{label}: embedded bharat_browser.py differs from the repository's (signed) file")
+        problems.append(f"{label}: embedded arrow_browser.py differs from the repository's (signed) file")
 
 
 def deb():
-    name = f"bharat-browser_{VERSION}-1_all.deb"
+    name = f"arrow-browser_{VERSION}-1_all.deb"
     if not os.path.exists(name):
         return problems.append(f"missing {name}")
     members = {}
@@ -58,7 +58,7 @@ def deb():
 
 
 def rpm():
-    name = f"bharat-browser-{VERSION}-1.noarch.rpm"
+    name = f"arrow-browser-{VERSION}-1.noarch.rpm"
     if not os.path.exists(name):
         return problems.append(f"missing {name}")
     header = run(["rpm", "-qp", "--queryformat", "%{VERSION}-%{RELEASE}", name]).decode()
@@ -69,11 +69,11 @@ def rpm():
 
 
 def archive():
-    name = f"bharat-browser_{VERSION}_fedora.tar.gz"
+    name = f"arrow-browser_{VERSION}_fedora.tar.gz"
     if not os.path.exists(name):
         return problems.append(f"missing {name}")
     with tarfile.open(name) as t:
-        for member in ("./bharat_browser.py", "./" + APP):
+        for member in ("./arrow_browser.py", "./" + APP):
             check_app(f"{name}:{member}", t.extractfile(member).read())
 
 
@@ -81,4 +81,4 @@ for check in (deb, rpm, archive):
     check()
 if problems:
     sys.exit("Package check FAILED:\n  " + "\n  ".join(problems))
-print(f"All three packages are version {VERSION} and contain the signed bharat_browser.py ({SOURCE_SHA[:12]}).")
+print(f"All three packages are version {VERSION} and contain the signed arrow_browser.py ({SOURCE_SHA[:12]}).")

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Diagnostic monitor for a running Bharat Browser: samples it, analyzes the run,
+Diagnostic monitor for a running Arrow Browser: samples it, analyzes the run,
 and writes a report of findings with concrete suggestions for improving it.
 
 Complements tools/monitor-resources.py (raw RSS/CPU CSV). This tool adds:
@@ -19,11 +19,11 @@ contents or page data - only file sizes/mtimes in the config dir, /proc
 counters, and journal lines that match crash patterns (URLs are redacted).
 
 Usage:
-    python3 tools/bharat-diagnose.py                    # sample until Ctrl+C or browser exit
-    python3 tools/bharat-diagnose.py --duration 900     # stop after 15 min
-    python3 tools/bharat-diagnose.py --snapshot         # ~10s quick check
-    python3 tools/bharat-diagnose.py --output-dir out/  # where report.md / samples.csv go
-    python3 tools/bharat-diagnose.py --watch --notify   # diagnose EVERY browser session, forever
+    python3 tools/arrow-diagnose.py                    # sample until Ctrl+C or browser exit
+    python3 tools/arrow-diagnose.py --duration 900     # stop after 15 min
+    python3 tools/arrow-diagnose.py --snapshot         # ~10s quick check
+    python3 tools/arrow-diagnose.py --output-dir out/  # where report.md / samples.csv go
+    python3 tools/arrow-diagnose.py --watch --notify   # diagnose EVERY browser session, forever
 
 Watch mode waits (cheaply) for the browser to start, records the session until
 it exits, writes one JSON log per session to <project>/logs/, then waits for the next launch. Run it
@@ -46,7 +46,7 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CONFIG_DIR = os.path.expanduser("~/.config/bharat-browser")
+CONFIG_DIR = os.path.expanduser("~/.config/arrow-browser")
 CLOCK_TICKS = os.sysconf("SC_CLK_TCK")
 
 MIN_TREND_SECONDS = 300          # shortest run that can say anything about growth
@@ -306,7 +306,7 @@ def analyze_run(run, exit_crash_lines=None):
     out = []
     samples = run.samples
     if not samples:
-        return [finding("INFO", "No data collected", "Bharat Browser was never observed running.",
+        return [finding("INFO", "No data collected", "Arrow Browser was never observed running.",
                         "Launch the browser, then run this tool again.")]
 
     duration = samples[-1]["t"]
@@ -379,14 +379,14 @@ def analyze_run(run, exit_crash_lines=None):
                 "MEDIUM", "Main process uses noticeable CPU",
                 f"Average {avg:.1f}% CPU; above 25% in {busy * 100:.0f}% of samples. The main process only runs UI, "
                 "blocking and filter logic - page work belongs in the renderers.",
-                "Profile the main loop: `python3 -m cProfile -o prof.out bharat_browser.py`, then inspect with pstats. "
+                "Profile the main loop: `python3 -m cProfile -o prof.out arrow_browser.py`, then inspect with pstats. "
                 "Typical culprits: per-request adblock matching in Python, polling timers, synchronous disk writes."))
     idle_web = [p["cpu"] for s in samples[1:] for p in s["procs"] if p["role"] == "web_process"]
     if len(idle_web) >= 10 and sum(idle_web) / len(idle_web) > 15:
         out.append(finding("LOW", "Renderers average high CPU",
                            f"Average {sum(idle_web) / len(idle_web):.0f}% per WebProcess sample.",
                            "Usually page content (video, animations, ad scripts). Compare with the same page in another "
-                           "browser; if only Bharat is high, check GPU acceleration and ad-blocking effectiveness."))
+                           "browser; if only Arrow is high, check GPU acceleration and ad-blocking effectiveness."))
 
     # --- memory share / per-process size -------------------------------------
     peak = max(total_mem_kb(s) for s in samples) / 1024.0
@@ -485,7 +485,7 @@ def analyze_static(settings, config_entries, env, peak_web_processes, now=None):
     if total_mb > CONFIG_BIG_MB:
         top = ", ".join(f"{e['name']} {e['mb']:.0f}MB" for e in config_entries[:4])
         out.append(finding("MEDIUM", "Browser data directory is large",
-                           f"{total_mb:.0f} MB in ~/.config/bharat-browser. Largest: {top}.",
+                           f"{total_mb:.0f} MB in ~/.config/arrow-browser. Largest: {top}.",
                            "Clear cache/site data from the browser, or remove stale entries listed below."))
     stale = [e for e in config_entries if e["mb"] >= 1 and e["newest"] and (now - e["newest"]) > STALE_DAYS * 86400]
     if stale:
@@ -531,7 +531,7 @@ def read_environment(settings):
 
 
 CRASH_RE = re.compile(r"(segfault|SIGSEGV|SIGABRT|Traceback|CRITICAL|core dumped|terminated|crash|killed process)", re.I)
-APP_RE = re.compile(r"(bharat|WebKit)", re.I)
+APP_RE = re.compile(r"(arrow|WebKit)", re.I)
 URL_RE = re.compile(r"https?://\S+")
 
 
@@ -566,7 +566,7 @@ def write_csv(run, path):
 
 def render_report(run, findings, env, config_entries, crash_lines, settings):
     findings = sorted(findings, key=lambda f: SEVERITY_ORDER[f["severity"]])
-    L = ["# Bharat Browser diagnostic report", "",
+    L = ["# Arrow Browser diagnostic report", "",
          f"Generated {time.strftime('%Y-%m-%d %H:%M:%S')}", ""]
     actionable = [f for f in findings if f["severity"] != "INFO"]
     L += ["## Findings", ""]
@@ -592,7 +592,7 @@ def render_report(run, findings, env, config_entries, crash_lines, settings):
           "- Settings: " + ", ".join(f"{k}={v}" for k, v in sorted((settings or {}).items())
                                      if k not in ("homepage", "download_dir", "search_engine")), ""]
     if config_entries:
-        L += ["## Data directory (~/.config/bharat-browser)", "", "| Entry | MB |", "|---|---|"]
+        L += ["## Data directory (~/.config/arrow-browser)", "", "| Entry | MB |", "|---|---|"]
         L += [f"| {e['name']} | {e['mb']:.1f} |" for e in config_entries[:10]] + [""]
     L += ["## Recent crash lines (journal, last 24h)", ""]
     if crash_lines is None:
@@ -700,7 +700,7 @@ def notify_findings(findings, report_path):
         return
     body = "\n".join(f"[{f['severity']}] {f['title']}" for f in top[:3]) + f"\nLog: {report_path}"
     try:
-        subprocess.run(["notify-send", "-a", "Bharat diagnostics", f"Bharat Browser: {len(top)} issue(s) found", body],
+        subprocess.run(["notify-send", "-a", "Arrow diagnostics", f"Arrow Browser: {len(top)} issue(s) found", body],
                        timeout=5, capture_output=True)
     except (OSError, subprocess.TimeoutExpired):
         pass
@@ -745,7 +745,7 @@ def watch(args):
     base = args.watch_dir
     os.makedirs(base, exist_ok=True)
     monitor = load_monitor_module()
-    print(f"Watching for Bharat Browser sessions; JSON logs go to {base}", flush=True)
+    print(f"Watching for Arrow Browser sessions; JSON logs go to {base}", flush=True)
     while wait_for_browser(monitor):
         started = time.time()
         stamp = time.strftime("session-%Y%m%d-%H%M%S")
@@ -767,12 +767,12 @@ def watch(args):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Diagnose a running Bharat Browser and suggest improvements.")
+    ap = argparse.ArgumentParser(description="Diagnose a running Arrow Browser and suggest improvements.")
     ap.add_argument("--interval", type=float, default=5.0, help="Seconds between samples (default: 5)")
     ap.add_argument("--duration", type=float, default=None, help="Stop after this many seconds (default: until Ctrl+C or browser exit)")
     ap.add_argument("--snapshot", action="store_true", help="Quick ~10s check (no leak analysis)")
     ap.add_argument("--wait", type=float, default=30.0, help="Seconds to wait for the browser to start (default: 30)")
-    ap.add_argument("--output-dir", default=None, help="Directory for report.md and samples.csv (default: ./bharat-diagnostics-<timestamp>)")
+    ap.add_argument("--output-dir", default=None, help="Directory for report.md and samples.csv (default: ./arrow-diagnostics-<timestamp>)")
     ap.add_argument("--watch", action="store_true", help="Diagnose every browser session, forever (waits for each launch)")
     ap.add_argument("--watch-dir", default=DEFAULT_WATCH_DIR, help="Where watch mode stores JSON session logs (default: <project>/logs)")
     ap.add_argument("--keep", type=int, default=50, help="Watch mode: keep this many most recent session logs (default: 50)")
@@ -787,8 +787,8 @@ def main():
     if args.snapshot:
         args.duration, args.interval = 10.0, 2.0
 
-    out_dir = args.output_dir or f"bharat-diagnostics-{int(time.time())}"
-    print(f"Bharat Browser diagnostics -> {out_dir}  (Ctrl+C to stop and write the report)")
+    out_dir = args.output_dir or f"arrow-diagnostics-{int(time.time())}"
+    print(f"Arrow Browser diagnostics -> {out_dir}  (Ctrl+C to stop and write the report)")
     run = collect(load_monitor_module(), args.interval, args.duration, args.wait, quiet=args.quiet)
     findings = finish_session(run, out_dir, notify=args.notify, json_path=os.path.join(out_dir, "session.json"), started_at=time.time() - (run.samples[-1]["t"] if run.samples else 0))
 

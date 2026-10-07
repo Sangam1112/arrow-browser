@@ -41,15 +41,15 @@ class InstallerTests(unittest.TestCase):
 
     def assert_installed(self, home, result, desktop=True):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        app = os.path.join(home, ".local", "share", "bharat-browser")
-        launcher = os.path.join(home, ".local", "bin", "bharat-browser")
-        self.assertTrue(os.path.isfile(os.path.join(app, "bharat_browser.py")))
-        self.assertTrue(os.path.isfile(os.path.join(app, "assets", "bharat_icon.png")))
+        app = os.path.join(home, ".local", "share", "arrow-browser")
+        launcher = os.path.join(home, ".local", "bin", "arrow-browser")
+        self.assertTrue(os.path.isfile(os.path.join(app, "arrow_browser.py")))
+        self.assertTrue(os.path.isfile(os.path.join(app, "assets", "arrow_icon.png")))
         self.assertTrue(os.access(launcher, os.X_OK))
         if desktop:
-            self.assertTrue(os.path.isfile(os.path.join(home, ".local", "share", "applications", "bharat-browser.desktop")))
-        with open(os.path.join(app, "bharat_browser.py"), "rb") as a, open(os.path.join(ROOT, "bharat_browser.py"), "rb") as b:
-            self.assertEqual(a.read(), b.read(), "installed the current bharat_browser.py")
+            self.assertTrue(os.path.isfile(os.path.join(home, ".local", "share", "applications", "arrow-browser.desktop")))
+        with open(os.path.join(app, "arrow_browser.py"), "rb") as a, open(os.path.join(ROOT, "arrow_browser.py"), "rb") as b:
+            self.assertEqual(a.read(), b.read(), "installed the current arrow_browser.py")
 
     def test_ubuntu_from_checkout(self):
         self.assert_installed(*self.run_installer(ROOT, "install-ubuntu.sh"))
@@ -109,10 +109,10 @@ done
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("webkit2gtk4.1", result.stderr)
         self.assertIn("webkit2gtk3", result.stderr)
-        self.assertFalse(os.path.exists(os.path.join(home, ".local", "bin", "bharat-browser")), "nothing half-installed")
+        self.assertFalse(os.path.exists(os.path.join(home, ".local", "bin", "arrow-browser")), "nothing half-installed")
 
     def test_rpm_accepts_either_webkit_package(self):
-        rpms = sorted(glob.glob(os.path.join(ROOT, "bharat-browser-*.noarch.rpm")))
+        rpms = sorted(glob.glob(os.path.join(ROOT, "arrow-browser-*.noarch.rpm")))
         if not rpms or not shutil.which("rpm"):
             self.skipTest("no RPM built, or the rpm tool is missing")
         out = subprocess.run(["rpm", "-qp", "--requires", rpms[-1]], capture_output=True, text=True).stdout
@@ -120,7 +120,7 @@ done
         self.assertIn("webkit2gtk3", out)
 
     def test_fedora_archive_works_when_extracted_alone(self):
-        archives = sorted(glob.glob(os.path.join(ROOT, "bharat-browser_*_fedora.tar.gz")))
+        archives = sorted(glob.glob(os.path.join(ROOT, "arrow-browser_*_fedora.tar.gz")))
         if not archives:
             self.skipTest("build-rpm.sh hasn't been run, so there is no Fedora archive")
         extract = os.path.join(self.tmp, "extracted")
@@ -156,7 +156,7 @@ class WindowsInstallerTests(unittest.TestCase):
                               env=env, capture_output=True, text=True, timeout=30)
 
     def test_system_step_installs_the_package_even_if_the_upgrade_fails(self):
-        deb = os.path.join(self.tmp, "bharat-browser_9.9.9-1_all.deb")
+        deb = os.path.join(self.tmp, "arrow-browser_9.9.9-1_all.deb")
         with open(deb, "w") as f:
             f.write("package")
         result = self.wsl_setup("system", deb)
@@ -165,12 +165,12 @@ class WindowsInstallerTests(unittest.TestCase):
         with open(self.log) as f:
             calls = f.read().splitlines()
         self.assertEqual(calls[0], "update")
-        self.assertIn(f"install -y {self.tmp}/bharat-browser.deb gnome-keyring fonts-noto-core", calls)
-        self.assertFalse(os.path.exists(os.path.join(self.tmp, "bharat-browser.deb")), "the copy is cleaned up")
+        self.assertIn(f"install -y {self.tmp}/arrow-browser.deb gnome-keyring fonts-noto-core", calls)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "arrow-browser.deb")), "the copy is cleaned up")
 
     def test_user_step_saves_downloads_to_windows_and_never_overwrites_settings(self):
         home = os.path.join(self.tmp, "home")
-        settings = os.path.join(home, ".config", "bharat-browser", "settings.json")
+        settings = os.path.join(home, ".config", "arrow-browser", "settings.json")
         result = self.wsl_setup("user", "/mnt/c/Users/Asha/Downloads", home=home)
         self.assertEqual(result.returncode, 0, result.stderr)
         with open(settings) as f:
@@ -198,18 +198,18 @@ class WindowsInstallerTests(unittest.TestCase):
 
     def test_setup_exe_builds(self):
         makensis = os.environ.get("MAKENSIS") or shutil.which("makensis")
-        deb = sorted(glob.glob(os.path.join(ROOT, "bharat-browser_*-1_all.deb")))
+        deb = sorted(glob.glob(os.path.join(ROOT, "arrow-browser_*-1_all.deb")))
         if not makensis or not deb:
             self.skipTest("needs makensis (set MAKENSIS) and a built .deb")
         icon = os.path.join(self.tmp, "icon.ico")
-        with open(os.path.join(ROOT, "assets", "bharat_icon.png"), "rb") as f:
+        with open(os.path.join(ROOT, "assets", "arrow_icon.png"), "rb") as f:
             png = f.read()
         with open(icon, "wb") as f:
             f.write(struct.pack("<3H4B2H2I", 0, 1, 1, 0, 0, 0, 0, 1, 32, len(png), 22) + png)
         out = os.path.join(self.tmp, "setup.exe")
         result = subprocess.run([makensis, "-V2", "-DVERSION=9.9.9", f"-DDEB={deb[-1]}", f"-DICON={icon}",
                                  f"-DLICENSE={os.path.join(ROOT, 'LICENSE')}", f"-DOUTFILE={out}",
-                                 os.path.join(ROOT, "windows", "bharat-browser-setup.nsi")],
+                                 os.path.join(ROOT, "windows", "arrow-browser-setup.nsi")],
                                 capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         with open(out, "rb") as f:

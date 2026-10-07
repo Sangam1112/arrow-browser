@@ -10,7 +10,7 @@ bash tools/update-checksum.sh
 python3 tools/check-version.py
 
 VERSION="$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')"
-PKG_NAME="bharat-browser"
+PKG_NAME="arrow-browser"
 OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Downloads}"
 # A fresh private folder (not a fixed /tmp name another local user could create or swap first), made
 # world-readable like the package tree it holds.
@@ -20,53 +20,62 @@ trap 'rm -rf "$BUILD_ROOT"' EXIT
 
 echo "Building package for ${PKG_NAME} v${VERSION}..."
 
-mkdir -p "${BUILD_ROOT}/usr/share/bharat-browser/assets"
+mkdir -p "${BUILD_ROOT}/usr/share/arrow-browser/assets"
 mkdir -p "${BUILD_ROOT}/usr/bin"
 mkdir -p "${BUILD_ROOT}/usr/share/applications"
 mkdir -p "${BUILD_ROOT}/usr/share/icons/hicolor/256x256/apps"
 
-cp bharat_browser.py "${BUILD_ROOT}/usr/share/bharat-browser/"
-cp -r assets/* "${BUILD_ROOT}/usr/share/bharat-browser/assets/"
-cp bharat-browser "${BUILD_ROOT}/usr/bin/bharat-browser"
-cp bharat-browser.desktop "${BUILD_ROOT}/usr/share/applications/"
-cp assets/bharat_icon.png "${BUILD_ROOT}/usr/share/icons/hicolor/256x256/apps/bharat-browser.png"
+cp arrow_browser.py "${BUILD_ROOT}/usr/share/arrow-browser/"
+cp -r assets/* "${BUILD_ROOT}/usr/share/arrow-browser/assets/"
+cp arrow-browser "${BUILD_ROOT}/usr/bin/arrow-browser"
+cp arrow-browser.desktop "${BUILD_ROOT}/usr/share/applications/"
+cp assets/arrow_icon.png "${BUILD_ROOT}/usr/share/icons/hicolor/256x256/apps/arrow-browser.png"
+mkdir -p "${BUILD_ROOT}/usr/share/licenses/arrow-browser"
+cp LICENSE "${BUILD_ROOT}/usr/share/licenses/arrow-browser/LICENSE"  # the GPL goes with every copy
 
-chmod +x "${BUILD_ROOT}/usr/bin/bharat-browser" "${BUILD_ROOT}/usr/share/bharat-browser/bharat_browser.py"
+chmod +x "${BUILD_ROOT}/usr/bin/arrow-browser" "${BUILD_ROOT}/usr/share/arrow-browser/arrow_browser.py"
+# The command before the rename keeps working (menu entries, scripts, wrappers that call it).
+ln -s arrow-browser "${BUILD_ROOT}/usr/bin/bharat-browser"
 
 if command -v rpmbuild &> /dev/null; then
     mkdir -p ~/rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
-    cat <<EOF > ~/rpmbuild/SPECS/bharat-browser.spec
-Name:           bharat-browser
+    cat <<EOF > ~/rpmbuild/SPECS/arrow-browser.spec
+Name:           arrow-browser
 Version:        ${VERSION}
 Release:        1%{?dist}
 Summary:        Modern, Ultra-Fast, Multi-Tab, and Privacy-First Web Browser
-License:        MIT
-URL:            https://github.com/Sangam1112/bharat-browser
+License:        GPL-3.0-or-later
+URL:            https://github.com/Sangam1112/arrow-browser
 BuildArch:      noarch
 # Fedora names the WebKit package webkit2gtk4.1; RHEL/Rocky/AlmaLinux/CentOS Stream call it webkit2gtk3.
 Requires:       python3 python3-gobject gtk3 (webkit2gtk4.1 or webkit2gtk3)
 Suggests:       gnome-keyring hunspell-en
+# Called Bharat Browser up to 1.5.19: installing this replaces that package.
+Provides:       bharat-browser = %{version}-%{release}
+Obsoletes:      bharat-browser < 1.6.0
 
 %description
-Bharat Browser is a modern, high-performance web browser designed with strict security, privacy protection, and site compatibility at its core.
+Arrow Browser is a modern, high-performance web browser designed with strict security, privacy protection, and site compatibility at its core.
 
 %install
 mkdir -p %{buildroot}
 cp -r ${BUILD_ROOT}/* %{buildroot}/
 
 %files
+/usr/bin/arrow-browser
 /usr/bin/bharat-browser
-/usr/share/bharat-browser
-/usr/share/applications/bharat-browser.desktop
-/usr/share/icons/hicolor/256x256/apps/bharat-browser.png
+/usr/share/arrow-browser
+/usr/share/applications/arrow-browser.desktop
+%license /usr/share/licenses/arrow-browser/LICENSE
+/usr/share/icons/hicolor/256x256/apps/arrow-browser.png
 
-# Precompile on install so launches don't recompile bharat_browser.py each time (~0.25 s): users can't
+# Precompile on install so launches don't recompile arrow_browser.py each time (~0.25 s): users can't
 # write a __pycache__ into /usr/share themselves. Removed again on uninstall (not on upgrade).
 %post
-python3 -m py_compile /usr/share/bharat-browser/bharat_browser.py >/dev/null 2>&1 || :
+python3 -m py_compile /usr/share/arrow-browser/arrow_browser.py >/dev/null 2>&1 || :
 
 %preun
-if [ \$1 -eq 0 ]; then rm -rf /usr/share/bharat-browser/__pycache__; fi
+if [ \$1 -eq 0 ]; then rm -rf /usr/share/arrow-browser/__pycache__; fi
 
 %changelog
 * Wed Oct 07 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.19-1

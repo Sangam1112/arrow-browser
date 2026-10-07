@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Tests for the pure analysis logic in bharat-diagnose.py (synthetic runs; no browser needed)."""
+"""Tests for the pure analysis logic in arrow-diagnose.py (synthetic runs; no browser needed)."""
 import importlib.util
 import os
 import unittest
 
-spec = importlib.util.spec_from_file_location("bd", os.path.join(os.path.dirname(os.path.abspath(__file__)), "bharat-diagnose.py"))
+spec = importlib.util.spec_from_file_location("bd", os.path.join(os.path.dirname(os.path.abspath(__file__)), "arrow-diagnose.py"))
 bd = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bd)
 

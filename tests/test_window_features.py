@@ -18,11 +18,11 @@ import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # Must be set before the browser module computes its config paths at import time.
-_HOME = tempfile.mkdtemp(prefix="bharat-test-home-")
+_HOME = tempfile.mkdtemp(prefix="arrow-test-home-")
 os.environ["HOME"] = _HOME
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-spec = importlib.util.spec_from_file_location("bb_window", os.path.join(ROOT, "bharat_browser.py"))
+spec = importlib.util.spec_from_file_location("bb_window", os.path.join(ROOT, "arrow_browser.py"))
 bb = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bb)
 from gi.repository import Gdk, Gio, GLib, Gtk, WebKit2  # noqa: E402
@@ -185,7 +185,7 @@ class WindowFeatureTests(unittest.TestCase):
         cls.cert_file, key_file = os.path.join(_HOME, "test-cert.pem"), os.path.join(_HOME, "test-key.pem")
         subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "30",
                         "-keyout", key_file, "-out", cls.cert_file,
-                        "-subj", "/O=Bharat Test Issuer/CN=bharat-test.example",
+                        "-subj", "/O=Arrow Test Issuer/CN=arrow-test.example",
                         "-addext", "subjectAltName=IP:127.0.0.1,IP:127.0.0.2"], check=True, capture_output=True)
         TLSServer.tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         TLSServer.tls.load_cert_chain(cls.cert_file, key_file)
@@ -202,9 +202,9 @@ class WindowFeatureTests(unittest.TestCase):
         os.makedirs(bb.CACHE_DIR, exist_ok=True)
         with open(bb.TRACKER_LIST_CACHE, "w") as f:
             json.dump({"fetched": time.time(), "domains": ["localhost"]}, f)
-        bb.BharatBrowserWindow._maybe_refresh_tracker_list = lambda self: False
-        bb.BharatBrowserWindow.start_auto_git_update_check = lambda self: False
-        cls.win = bb.BharatBrowserWindow()
+        bb.ArrowBrowserWindow._maybe_refresh_tracker_list = lambda self: False
+        bb.ArrowBrowserWindow.start_auto_git_update_check = lambda self: False
+        cls.win = bb.ArrowBrowserWindow()
         cls.win.show_all()
         cls.win.secrets = FakeSecrets()
         assert spin(lambda: cls.win.content_filter is not None, 20), "content filter never compiled"
@@ -255,14 +255,15 @@ class WindowFeatureTests(unittest.TestCase):
         win.create_new_tab(self.base + "/blank")
         win.create_new_tab(self.base + "/thin")
         tabs = [win.notebook.get_nth_page(i) for i in range(win.notebook.get_n_pages())]
-        self.assertTrue(spin(lambda: all(not t._bharat_webview.is_loading() and t._bharat_webview.get_title()
+        self.assertTrue(spin(lambda: all(not t._arrow_webview.is_loading() and t._arrow_webview.get_title()
                                          for t in tabs[-2:]), 10))
         try:
             for tab in tabs[-2:] + tabs[-2:]:
                 win.notebook.set_current_page(win.notebook.page_num(tab))
-                wv = tab._bharat_webview
+                wv = tab._arrow_webview
                 self.assertEqual(win.url_entry.get_text(), wv.get_uri(), "address bar shows the tab clicked")
                 self.assertTrue(win.get_title().startswith(wv.get_title() + " - "), "window title too")
+                self.assertEqual(win.get_title(), wv.get_title() + " - Arrow Browser", "no version number in the title bar")
         finally:
             for tab in tabs[-2:]:
                 win.close_tab(tab)
@@ -282,7 +283,7 @@ class WindowFeatureTests(unittest.TestCase):
             self.assertTrue(spin(lambda: opener.get_title() == "opener" and not opener.is_loading(), 10))
             opener.run_javascript("document.getElementById('p').click()", None, None, None)
             self.assertTrue(spin(lambda: win.notebook.get_n_pages() == before + 2, 3), "no new tab")
-            popup = win.notebook.get_nth_page(win.notebook.get_n_pages() - 1)._bharat_webview
+            popup = win.notebook.get_nth_page(win.notebook.get_n_pages() - 1)._arrow_webview
             started = time.time()
             self.assertTrue(spin(lambda: popup.get_title() == "done", 10), "new tab never loaded")
             self.assertLess(time.time() - started, 5, "new tab stalled")
@@ -305,12 +306,12 @@ class WindowFeatureTests(unittest.TestCase):
         win = self.win
         win.create_new_tab(self.base + "/blank")
         win.create_new_tab(self.base + "/done")
-        spin(lambda: all(not win.notebook.get_nth_page(i)._bharat_webview.is_loading() for i in range(win.notebook.get_n_pages())))
+        spin(lambda: all(not win.notebook.get_nth_page(i)._arrow_webview.is_loading() for i in range(win.notebook.get_n_pages())))
         last = win.notebook.get_nth_page(win.notebook.get_n_pages() - 1)
         win.set_tab_pinned(last, True)
         self.assertEqual(win.notebook.page_num(last), 0, "pinned tab moves to the front")
-        self.assertFalse(last._bharat_close_btn.get_visible())
-        self.assertTrue(last._bharat_label.get_text().startswith("📌"))
+        self.assertFalse(last._arrow_close_btn.get_visible())
+        self.assertTrue(last._arrow_label.get_text().startswith("📌"))
         urls, pinned = win._collect_session()
         self.assertEqual(pinned, [0])
         win._run_session_save()
@@ -325,7 +326,7 @@ class WindowFeatureTests(unittest.TestCase):
         win.reopen_closed_tab()
         self.assertEqual(win.notebook.get_n_pages(), before + 1)
         win.set_tab_pinned(last, False)
-        self.assertTrue(last._bharat_close_btn.get_visible())
+        self.assertTrue(last._arrow_close_btn.get_visible())
 
         ev = Gdk.EventButton()  # what the "button-press-event" signal really passes to handlers
         ev.type = Gdk.EventType.BUTTON_PRESS
@@ -399,7 +400,7 @@ class WindowFeatureTests(unittest.TestCase):
 
     def test_tab_opened_by_a_link_loses_its_tracking_parameters(self):
         self.addCleanup(self.close_new_tabs, self.win._tab_boxes())
-        opener = self.open_tab("/opener", "opener")._bharat_webview
+        opener = self.open_tab("/opener", "opener")._arrow_webview
         count = self.win.notebook.get_n_pages()
         js(opener, "document.getElementById('p').click()")
         self.assertTrue(spin(lambda: "/done?k=1" in Handler.requests, 8), Handler.requests)
@@ -411,7 +412,7 @@ class WindowFeatureTests(unittest.TestCase):
         tab = self.open_tab("/framed", "framed")
         self.assertTrue(spin(lambda: Handler.hits.get("/thin", 0) > 0, 5))
         spin(lambda: False, 0.5)
-        self.assertEqual(tab._bharat_webview.get_uri(), self.base + "/framed", "the tab still shows its own page")
+        self.assertEqual(tab._arrow_webview.get_uri(), self.base + "/framed", "the tab still shows its own page")
 
     def test_http_is_really_upgraded_and_warns_when_https_fails(self):
         # 127.0.0.1 is never upgraded (local network); pretend it's a public site. The test server only
@@ -480,9 +481,9 @@ class WindowFeatureTests(unittest.TestCase):
 
     # ---- links from other apps ---------------------------------------------
     def test_links_passed_at_startup_open_as_tabs(self):
-        win = bb.BharatBrowserWindow(private=True, startup_urls=[self.base + "/done", self.base + "/thin"])
+        win = bb.ArrowBrowserWindow(private=True, startup_urls=[self.base + "/done", self.base + "/thin"])
         try:
-            uris = [tb._bharat_webview.get_uri() for tb in win._tab_boxes()]
+            uris = [tb._arrow_webview.get_uri() for tb in win._tab_boxes()]
             self.assertEqual(uris, [self.base + "/done", self.base + "/thin"], "no extra homepage tab")
             self.assertEqual(win.get_active_webview().get_uri(), self.base + "/thin")
         finally:
@@ -584,7 +585,7 @@ class WindowFeatureTests(unittest.TestCase):
         spin(lambda: False, 2.5)
         self.addCleanup(lambda: [self.win.close_tab(t) for t in self.win._tab_boxes()[before:]])
         results = self.measure()
-        new = {t._bharat_label.get_text(): i for t, i in results.items() if t in self.win._tab_boxes()[before:]}
+        new = {t._arrow_label.get_text(): i for t, i in results.items() if t in self.win._tab_boxes()[before:]}
         self.assertEqual(set(new), {"blank", "mem-heavy"})
         for info in new.values():
             self.assertEqual(info["state"], "ok")
@@ -622,7 +623,7 @@ class WindowFeatureTests(unittest.TestCase):
     def open_tab(self, path, title):
         self.win.create_new_tab(self.base + path)
         tab = self.win._tab_boxes()[-1]
-        self.assertTrue(spin(lambda: tab._bharat_webview.get_title() == title and not tab._bharat_webview.is_loading(), 10))
+        self.assertTrue(spin(lambda: tab._arrow_webview.get_title() == title and not tab._arrow_webview.is_loading(), 10))
         return tab
 
     def close_new_tabs(self, before):
@@ -640,9 +641,9 @@ class WindowFeatureTests(unittest.TestCase):
         win.create_new_tab(self.base + "/thin")
         front = win.notebook.get_nth_page(win.notebook.get_n_pages() - 1)
         try:
-            self.assertTrue(spin(lambda: not tab._bharat_webview.is_loading(), 10))
+            self.assertTrue(spin(lambda: not tab._arrow_webview.is_loading(), 10))
             # A renderer stuck in a script never answers the typed-text check.
-            tab._bharat_webview.run_javascript_in_world = lambda *args: None
+            tab._arrow_webview.run_javascript_in_world = lambda *args: None
             win.TYPED_TEXT_CHECK_TIMEOUT_MS = 200
             results = []
             win._sleep_unless_typed(tab, results.append)
@@ -657,14 +658,14 @@ class WindowFeatureTests(unittest.TestCase):
             self.assertTrue(spin(lambda: not win._relieving_memory_pressure, 3), "memory relief stays locked out")
         finally:
             del win.TYPED_TEXT_CHECK_TIMEOUT_MS
-            del tab._bharat_webview.run_javascript_in_world
+            del tab._arrow_webview.run_javascript_in_world
             win.close_tab(front)
             win.close_tab(tab)
 
     def test_sleeping_tab_ends_its_renderer_and_comes_back(self):
         self.addCleanup(self.close_new_tabs, self.win._tab_boxes())
         tab = self.open_tab("/article", "Test Article")
-        wv = tab._bharat_webview
+        wv = tab._arrow_webview
         wv.load_uri(self.base + "/done")
         self.assertTrue(spin(lambda: wv.get_title() == "done", 10))
         self.open_tab("/blank", "blank")
@@ -672,7 +673,7 @@ class WindowFeatureTests(unittest.TestCase):
         self.assertIsNotNone(pid)
         self.assertTrue(self.win._suspend_tab(tab))
         self.assertTrue(spin(lambda: pid not in bb.web_process_pids(), 5), "the sleeping tab's renderer is gone")
-        self.assertTrue(tab._bharat_label.get_text().startswith("💤"))
+        self.assertTrue(tab._arrow_label.get_text().startswith("💤"))
         self.assertIn(self.base + "/done", self.win._collect_session()[0], "still saved in the session")
         self.win.notebook.set_current_page(self.win.notebook.page_num(tab))
         self.assertTrue(spin(lambda: wv.get_title() == "done" and not wv.is_loading(), 10), "reloads where it was")
@@ -686,10 +687,10 @@ class WindowFeatureTests(unittest.TestCase):
         self.win.restore_tabs(urls)
         r1, r2, last = self.win._tab_boxes()[before:]
         self.assertIs(self.win.get_active_tab_box(), last)
-        self.assertTrue(spin(lambda: last._bharat_webview.get_title() == "blank", 10), "the tab you land on loads")
+        self.assertTrue(spin(lambda: last._arrow_webview.get_title() == "blank", 10), "the tab you land on loads")
         spin(lambda: False, 1.0)
         self.assertEqual((Handler.hits.get("/r1", 0), Handler.hits.get("/r2", 0)), (0, 0), "the others wait")
-        self.assertEqual(r1._bharat_label.get_text(), "💤 127.0.0.1")
+        self.assertEqual(r1._arrow_label.get_text(), "💤 127.0.0.1")
         self.assertEqual(self.win._collect_session()[0][-3:], urls, "all of them stay in the session")
         self.win.notebook.set_current_page(self.win.notebook.page_num(r1))
         self.assertTrue(spin(lambda: Handler.hits.get("/r1", 0) > 0, 5), "opening a tab loads it")
@@ -701,7 +702,7 @@ class WindowFeatureTests(unittest.TestCase):
         pinned = self.open_tab("/thin", "thin")
         self.win.set_tab_pinned(pinned, True)
         typed = self.open_tab("/form", "form")
-        js(typed._bharat_webview, "const t=document.getElementById('t'); t.value='a reply in progress';"
+        js(typed._arrow_webview, "const t=document.getElementById('t'); t.value='a reply in progress';"
                                   "t.dispatchEvent(new Event('input', {bubbles: true})); 1")
         self.open_tab("/blank", "blank")
         for tab in (plain, pinned, typed):
@@ -711,7 +712,7 @@ class WindowFeatureTests(unittest.TestCase):
         spin(lambda: False, 1.0)
         self.assertFalse(self.asleep(pinned), "pinned tabs stay awake")
         self.assertFalse(self.asleep(typed), "so do tabs holding typed text")
-        js(typed._bharat_webview, "document.getElementById('t').value=''; 1")  # the reply was sent
+        js(typed._arrow_webview, "document.getElementById('t').value=''; 1")  # the reply was sent
         self.win._check_tab_suspension()
         self.assertTrue(spin(lambda: self.asleep(typed), 5))
 
@@ -739,7 +740,7 @@ class WindowFeatureTests(unittest.TestCase):
     def test_popup_sleeps_without_killing_the_opener_it_shares_a_renderer_with(self):
         self.addCleanup(self.close_new_tabs, self.win._tab_boxes())
         opener_tab = self.open_tab("/done", "done")
-        opener = opener_tab._bharat_webview
+        opener = opener_tab._arrow_webview
         popup = self.win.on_create_webview(opener, None)
         popup_tab = self.win._tab_boxes()[-1]
         popup.load_uri(self.base + "/thin")
@@ -751,7 +752,7 @@ class WindowFeatureTests(unittest.TestCase):
         self.assertEqual(js(opener, "document.title"), "done", "the opener's renderer is still running")
         self.assertEqual(Handler.hits.get("/done", 0), 0, "and it was not reloaded")
         self.win.close_tab(popup_tab)
-        self.assertEqual(opener._bharat_related, {opener})
+        self.assertEqual(opener._arrow_related, {opener})
 
     def test_tab_on_screen_reloads_if_its_renderer_is_ended(self):
         wv = self.load("/done", wait_title="done")
@@ -864,22 +865,22 @@ class WindowFeatureTests(unittest.TestCase):
         self.win._show_https_warning(wv, "https://plain-only.example/page", "connection refused")
         self.assertTrue(spin(lambda: "Secure connection unavailable" in (js(wv, "document.body.innerText") or ""), 8))
         href = js(wv, "document.querySelector('a.alt').href")
-        self.assertTrue(href.startswith("bharat://allow-http?t="))
+        self.assertTrue(href.startswith("arrow://allow-http?t="))
 
         class SchemeReq:
             def __init__(self, uri): self.uri, self.body = uri, None
             def get_uri(self): return self.uri
             def finish(self, stream, length, ctype): self.body = stream.read_bytes(length, None).get_data().decode()
 
-        forged = SchemeReq("bharat://allow-http?t=guess")
-        self.win._on_bharat_scheme(forged, None)
+        forged = SchemeReq("arrow://allow-http?t=guess")
+        self.win._on_arrow_scheme(forged, None)
         self.assertNotIn("plain-only.example", self.win._http_allowed_hosts, "a guessed token does nothing")
         real = SchemeReq(href)
-        self.win._on_bharat_scheme(real, None)
+        self.win._on_arrow_scheme(real, None)
         self.assertIn("plain-only.example", self.win._http_allowed_hosts)
         self.assertIn("http://plain-only.example/page", real.body)
         again = SchemeReq(href)
-        self.win._on_bharat_scheme(again, None)
+        self.win._on_arrow_scheme(again, None)
         self.assertNotIn("refresh", again.body, "the token is single-use")
         self.win._http_allowed_hosts.discard("plain-only.example")
 
@@ -922,7 +923,7 @@ class WindowFeatureTests(unittest.TestCase):
         try:
             win.create_new_tab(self.base + "/login")
             login_tab = win.notebook.get_nth_page(win.notebook.get_n_pages() - 1)
-            login = login_tab._bharat_webview
+            login = login_tab._arrow_webview
             win.create_new_tab(f"http://localhost:{self.port}/blank")
             front = win.get_active_webview()
             self.assertTrue(spin(lambda: not login.is_loading() and not front.is_loading()
@@ -1004,11 +1005,11 @@ class WindowFeatureTests(unittest.TestCase):
     def test_settings_dialog_pages_and_switches(self):
         dialog = self.win.build_settings_dialog("privacy")
         try:
-            stack = dialog._bharat_stack
+            stack = dialog._arrow_stack
             self.assertEqual([stack.child_get_property(c, "name") for c in stack.get_children()],
                              ["general", "privacy", "data", "performance", "about"])
             self.assertEqual(stack.get_visible_child_name(), "privacy")
-            controls = dialog._bharat_controls
+            controls = dialog._arrow_controls
             for key, sw in controls.items():
                 if isinstance(sw, Gtk.Switch):
                     self.assertEqual(sw.get_active(), bool(getattr(self.win, key)), key)
@@ -1036,7 +1037,7 @@ class WindowFeatureTests(unittest.TestCase):
 
         class Page:
             def __init__(self, tls, mixed=False, committed=True):
-                self.tls, self._bharat_mixed_content, self._bharat_committed = tls, mixed, committed
+                self.tls, self._arrow_mixed_content, self._arrow_committed = tls, mixed, committed
 
             def get_tls_info(self):
                 return self.tls
@@ -1062,7 +1063,7 @@ class WindowFeatureTests(unittest.TestCase):
         self.win.create_new_tab(url)
         tab = self.win._tab_boxes()[-1]
         self.win.notebook.set_current_page(self.win.notebook.page_num(tab))
-        wv = tab._bharat_webview
+        wv = tab._arrow_webview
         self.assertTrue(spin(lambda: "not private" in (js(wv, "document.body ? document.body.innerText : ''") or ""), 10))
         self.assertNotIn("/done", Handler.requests, "the request never reached the site")
         self.assertEqual(wv.get_uri(), url)
@@ -1077,22 +1078,22 @@ class WindowFeatureTests(unittest.TestCase):
         self.win.create_new_tab(f"https://127.0.0.2:{self.tls_servers['127.0.0.2'].server_port}/done")
         tab = self.win._tab_boxes()[-1]
         self.win.notebook.set_current_page(self.win.notebook.page_num(tab))
-        wv = tab._bharat_webview
+        wv = tab._arrow_webview
         self.assertTrue(spin(lambda: not wv.is_loading() and wv.get_title() == "done", 10), wv.get_uri())
         state, cert = self.win.connection_security(wv, wv.get_uri())
         self.assertEqual(state, "bad-cert")
-        self.assertEqual(bb.certificate_summary(cert)["issued_to"], "bharat-test.example")
+        self.assertEqual(bb.certificate_summary(cert)["issued_to"], "arrow-test.example")
         self.assertTrue(self.win.url_entry.get_style_context().has_class("url-insecure"))
         self.assertIn("certificate has problems", self.win.url_entry.get_icon_tooltip_text(Gtk.EntryIconPosition.PRIMARY))
         markup = self.win.site_security_markup(wv, wv.get_uri(), "127.0.0.2")
-        self.assertIn("Issued by: Bharat Test Issuer", markup)
+        self.assertIn("Issued by: Arrow Test Issuer", markup)
 
     def test_certificate_details(self):
         c = bb.certificate_summary(Gio.TlsCertificate.new_from_file(self.cert_file))
         der = ssl.PEM_cert_to_DER_cert(open(self.cert_file).read())
         import hashlib
         self.assertEqual(c["sha256"].replace(":", ""), hashlib.sha256(der).hexdigest().upper())
-        self.assertEqual((c["issued_to"], c["issued_by"]), ("bharat-test.example", "Bharat Test Issuer"))
+        self.assertEqual((c["issued_to"], c["issued_by"]), ("arrow-test.example", "Arrow Test Issuer"))
         self.assertRegex(c["valid_until"], r"^\d{1,2} [A-Z][a-z]{2} \d{4}$")
         self.assertEqual(bb.dn_field(r"C=US,O=Acme\, Inc.,CN=R3", "O"), "Acme, Inc.")
 
@@ -1107,23 +1108,23 @@ class WindowFeatureTests(unittest.TestCase):
                     if found:
                         return found
             row = find(dialog).get_parent()
-            while not hasattr(row, "_bharat_button"):
+            while not hasattr(row, "_arrow_button"):
                 row = row.get_parent()
             pages = self.win.notebook.get_n_pages()
             opened = []
             self.win.create_new_tab = lambda url=None, **kw: opened.append(url)
             try:
-                row._bharat_button.clicked()
+                row._arrow_button.clicked()
                 spin(lambda: opened, 2)
             finally:
                 del self.win.create_new_tab
-            self.assertEqual(opened, ["https://github.com/Sangam1112/bharat-browser"])
+            self.assertEqual(opened, ["https://github.com/Sangam1112/arrow-browser"])
             self.assertEqual(self.win.notebook.get_n_pages(), pages)
         finally:
             dialog.destroy()
 
     def test_private_window_never_writes_site_settings(self):
-        private = bb.BharatBrowserWindow(private=True)
+        private = bb.ArrowBrowserWindow(private=True)
         try:
             self.assertEqual(private.site_settings, {})
             bb.set_site_value(private.site_settings, "x.test", "zoom", 2.0)
@@ -1140,7 +1141,7 @@ class WindowFeatureTests(unittest.TestCase):
         original = bb.running_under_wsl
         bb.running_under_wsl = lambda: True
         try:
-            wsl = bb.BharatBrowserWindow(private=True)
+            wsl = bb.ArrowBrowserWindow(private=True)
         finally:
             bb.running_under_wsl = original
         try:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Standalone process/memory monitor for a running Bharat Browser instance.
+Standalone process/memory monitor for a running Arrow Browser instance.
 
 Not part of the shipped packages (RPM/.deb/tarball) — a diagnostic tool for
 developers reproducing reports like memory growth or "system overload" on a
@@ -8,7 +8,7 @@ real machine, without needing to install anything beyond the Python 3
 standard library.
 
 Tracks the browser's whole process group by matching command lines: the main
-`bharat_browser.py` process plus every WebKit subprocess it spawns (one
+`arrow_browser.py` process plus every WebKit subprocess it spawns (one
 WebProcess roughly per site/tab group, a shared NetworkProcess, and a GPU
 process if one is running) — found by pattern rather than by walking process
 parent/child links, since WebKit's sandboxing can reparent subprocesses under
@@ -52,11 +52,11 @@ def read_cmdline_tokens(pid):
     """Returns the process's argv as a list of tokens (NUL-delimited, as the
     kernel actually reports it) rather than a single joined string. This
     matters for correctly identifying the main process: a shell wrapper that
-    merely *mentions* "bharat_browser.py" somewhere inside one large embedded
-    command string (e.g. `bash -c "... python3 bharat_browser.py ..."`) would
+    merely *mentions* "arrow_browser.py" somewhere inside one large embedded
+    command string (e.g. `bash -c "... python3 arrow_browser.py ..."`) would
     still match a naive substring search on the joined string, but does NOT
-    have "bharat_browser.py" as its own standalone argv token the way the
-    real `python3 bharat_browser.py` invocation does — confirmed live: an
+    have "arrow_browser.py" as its own standalone argv token the way the
+    real `python3 arrow_browser.py` invocation does — confirmed live: an
     early version of this script misidentified exactly such a wrapper as a
     second main-process instance."""
     try:
@@ -71,7 +71,7 @@ def read_cmdline_tokens(pid):
 
 def _token_names(name):
     """A token identifies process `name` if it equals it exactly (argv[0]
-    with no path, e.g. just "bharat_browser.py") or ends with "/"+name (a
+    with no path, e.g. just "arrow_browser.py") or ends with "/"+name (a
     full path, e.g. ".../webkit2gtk-4.1/WebKitWebProcess")."""
     def matches(token):
         return token == name or token.endswith("/" + name)
@@ -92,13 +92,14 @@ def classify(tokens):
     for role, exe_name in ROLE_EXECUTABLE_NAMES.items():
         if any(_token_names(exe_name)(t) for t in tokens):
             return role
-    if any(_token_names("bharat_browser.py")(t) for t in tokens):
+    # bharat_browser.py: the name before the rename, still started by older launchers.
+    if any(_token_names(name)(t) for name in ("arrow_browser.py", "bharat_browser.py") for t in tokens):
         return "main"
     return None
 
 
 def find_browser_pids():
-    """Returns {pid: role} for every process belonging to a running Bharat
+    """Returns {pid: role} for every process belonging to a running Arrow
     Browser instance (main process + WebKit subprocesses)."""
     found = {}
     for entry in os.listdir("/proc"):
@@ -138,18 +139,18 @@ def format_mb(kb):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Monitor a running Bharat Browser's process/memory footprint.")
+    parser = argparse.ArgumentParser(description="Monitor a running Arrow Browser's process/memory footprint.")
     parser.add_argument("--interval", type=float, default=2.0, help="Seconds between samples (default: 2)")
     parser.add_argument("--duration", type=float, default=None, help="Stop automatically after this many seconds (default: run until Ctrl+C)")
-    parser.add_argument("--output", default=None, help="CSV log file path (default: bharat-browser-monitor-<timestamp>.csv in the current directory)")
+    parser.add_argument("--output", default=None, help="CSV log file path (default: arrow-browser-monitor-<timestamp>.csv in the current directory)")
     args = parser.parse_args()
 
-    output_path = args.output or f"bharat-browser-monitor-{int(time.time())}.csv"
+    output_path = args.output or f"arrow-browser-monitor-{int(time.time())}.csv"
     csv_file = open(output_path, "w", newline="")
     writer = csv.writer(csv_file)
     writer.writerow(["timestamp", "elapsed_s", "pid", "role", "rss_mb", "cpu_percent"])
 
-    print(f"Bharat Browser resource monitor — logging to {output_path}")
+    print(f"Arrow Browser resource monitor — logging to {output_path}")
     print("Waiting for a running instance (launch it now if it isn't already running)...")
 
     prev_cpu = {}  # pid -> (utime, stime, wall_time)
@@ -169,7 +170,7 @@ def main():
 
         if not pids:
             if saw_process_yet:
-                print(f"[{time.strftime('%H:%M:%S')}] Bharat Browser is no longer running. Stopping.")
+                print(f"[{time.strftime('%H:%M:%S')}] Arrow Browser is no longer running. Stopping.")
                 break
             time.sleep(min(args.interval, 1.0))
             if args.duration and (time.time() - start_time) >= args.duration:
@@ -231,7 +232,7 @@ def main():
         avg = sum(total_rss_samples) / len(total_rss_samples)
         print(f"Samples: {len(total_rss_samples)}  Peak total RSS: {format_mb(peak)}MB  Average total RSS: {format_mb(avg)}MB")
     else:
-        print("No samples were collected (Bharat Browser was never observed running).")
+        print("No samples were collected (Arrow Browser was never observed running).")
 
 
 if __name__ == "__main__":

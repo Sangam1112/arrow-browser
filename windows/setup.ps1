@@ -1,11 +1,11 @@
-# Bharat Browser for Windows: makes sure WSL 2 and Ubuntu are ready, then installs the
+# Arrow Browser for Windows: makes sure WSL 2 and Ubuntu are ready, then installs the
 # browser's Linux package inside Ubuntu. Run (elevated) by the Setup program, which then
 # creates the Windows shortcuts. Safe to run again: every step checks before it changes
 # anything. Written for Windows PowerShell 5.1, the version built into Windows 10 and 11.
 #
 # Exit codes: 0 done, 1 failed (the reason is shown in this window), 3010 restart needed.
 param(
-    [Parameter(Mandatory = $true)][string]$Package,     # bharat-browser_X.Y.Z-1_all.deb
+    [Parameter(Mandatory = $true)][string]$Package,     # arrow-browser_X.Y.Z-1_all.deb
     [Parameter(Mandatory = $true)][string]$ResultFile   # receives the Ubuntu distribution's name
 )
 
@@ -14,7 +14,7 @@ param(
 $ErrorActionPreference = "Continue"
 $env:WSL_UTF8 = "1"   # wsl.exe's own messages in UTF-8 instead of UTF-16
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$Host.UI.RawUI.WindowTitle = "Bharat Browser Setup"
+$Host.UI.RawUI.WindowTitle = "Arrow Browser Setup"
 
 $MinBuild = 19044          # Windows 10 21H2: the oldest build WSLg (Linux windows on the desktop) supports
 $NewDistro = "Ubuntu"
@@ -46,15 +46,15 @@ function Get-WslText {
     return $text.Trim()
 }
 
-Write-Host "Bharat Browser Setup" -ForegroundColor Green
-Write-Host "Bharat Browser is a Linux app. It runs on Windows through WSL 2, Microsoft's built-in Linux support."
+Write-Host "Arrow Browser Setup" -ForegroundColor Green
+Write-Host "Arrow Browser is a Linux app. It runs on Windows through WSL 2, Microsoft's built-in Linux support."
 Write-Host "Keep this window open until it says it is done."
 
 # --- 1. Windows ----------------------------------------------------------------------
 Write-Step 1 "Checking Windows"
 $build = [Environment]::OSVersion.Version.Build
 if ($build -lt $MinBuild) {
-    Stop-Setup ("Bharat Browser needs Windows 11, or Windows 10 version 21H2 (build $MinBuild) or later. " +
+    Stop-Setup ("Arrow Browser needs Windows 11, or Windows 10 version 21H2 (build $MinBuild) or later. " +
                 "This PC has build $build. Install Windows updates (Settings > Windows Update), then run Setup again.")
 }
 $computer = Get-CimInstance Win32_ComputerSystem
@@ -77,7 +77,7 @@ if ((Invoke-Wsl --version) -ne 0) {
         $null = Invoke-Wsl --install   # older Windows builds don't know --no-distribution
     }
     if ((Invoke-Wsl --version) -ne 0) {
-        Stop-Setup "WSL has been installed. Restart your PC, then run Bharat Browser Setup again to finish." 3010
+        Stop-Setup "WSL has been installed. Restart your PC, then run Arrow Browser Setup again to finish." 3010
     }
 }
 if ((Invoke-Wsl --update) -ne 0) {
@@ -119,15 +119,15 @@ foreach ($line in ((Get-WslText --list --verbose) -split "`r?`n")) {
 $null = Invoke-Wsl -d $distro "--" true
 if ((Get-WslText -d $distro "--" id -u) -in @("", "0")) {
     Stop-Setup ("$distro doesn't have a Linux user account yet. Open $distro from the Start menu, create a " +
-                "username and password, close it, then run Bharat Browser Setup again.")
+                "username and password, close it, then run Arrow Browser Setup again.")
 }
 
 # --- 4. Browser ----------------------------------------------------------------------
-Write-Step 4 "Updating Ubuntu and installing Bharat Browser (this can take several minutes)"
+Write-Step 4 "Updating Ubuntu and installing Arrow Browser (this can take several minutes)"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $code = Invoke-Wsl -d $distro -u root --cd $here "--" bash ./wsl-setup.sh system $Package
 if ($code -ne 0) {
-    Stop-Setup ("Installing Bharat Browser inside $distro failed (error $code); the reason is shown above. " +
+    Stop-Setup ("Installing Arrow Browser inside $distro failed (error $code); the reason is shown above. " +
                 "Check your internet connection and run Setup again.")
 }
 # Save downloads to the Windows Downloads folder rather than one inside Linux.
@@ -141,6 +141,6 @@ Set-Content -Path $ResultFile -Value $distro -Encoding Ascii
 # starts fresh from your normal (non-administrator) desktop shortcut.
 $null = Invoke-Wsl --shutdown
 Write-Host ""
-Write-Host "Bharat Browser is installed. Setup will now add the desktop and Start menu shortcuts." -ForegroundColor Green
+Write-Host "Arrow Browser is installed. Setup will now add the desktop and Start menu shortcuts." -ForegroundColor Green
 Start-Sleep -Seconds 3
 exit 0

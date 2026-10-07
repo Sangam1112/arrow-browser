@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Sign / verify the auto-update payload with Ed25519.
 
-The in-app updater (bharat_browser.py) refuses to install an update unless
+The in-app updater (arrow_browser.py) refuses to install an update unless
 package.json carries a "signature" that verifies against UPDATE_PUBLIC_KEY_HEX
 baked into the installed copy. The private key never lives in the repo.
 
   sign-release.py keygen   create the release key (once) and print the public key
-  sign-release.py sign     sign bharat_browser.py + package.json "version"
+  sign-release.py sign     sign arrow_browser.py + package.json "version"
   sign-release.py verify   check package.json's signature (independent
                            implementation: needs the `cryptography` package)
 
@@ -20,12 +20,13 @@ import re
 import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-SRC = os.path.join(ROOT, "bharat_browser.py")
+SRC = os.path.join(ROOT, "arrow_browser.py")
 PKG = os.path.join(ROOT, "package.json")
-KEY_PATH = os.environ.get(
-    "BHARAT_SIGNING_KEY",
-    os.path.expanduser("~/.config/bharat-browser-signing/release-ed25519.pem"),
-)
+_KEY_CANDIDATES = (os.path.expanduser("~/.config/arrow-browser-signing/release-ed25519.pem"),
+                   os.path.expanduser("~/.config/bharat-browser-signing/release-ed25519.pem"))  # name before the rename
+KEY_PATH = os.environ.get("ARROW_SIGNING_KEY") or os.environ.get("BHARAT_SIGNING_KEY") or next(
+    (p for p in _KEY_CANDIDATES if os.path.exists(p)), _KEY_CANDIDATES[0])
+# Kept from before the rename on purpose: installed copies verify updates with this prefix.
 PREFIX = b"bharat-browser-update\n"
 
 
@@ -95,13 +96,13 @@ def cmd_verify():
         source = f.read()
     m = re.search(r'^UPDATE_PUBLIC_KEY_HEX\s*=\s*"([0-9a-f]{64})"', source.decode(), re.M)
     if not m:
-        sys.exit("UPDATE_PUBLIC_KEY_HEX not found in bharat_browser.py")
+        sys.exit("UPDATE_PUBLIC_KEY_HEX not found in arrow_browser.py")
     data = load_pkg()
     try:
         Ed25519PublicKey.from_public_bytes(bytes.fromhex(m.group(1))).verify(
             bytes.fromhex(data.get("signature", "")), message(data["version"], source))
     except (InvalidSignature, ValueError):
-        sys.exit("INVALID: package.json signature does not match bharat_browser.py + version")
+        sys.exit("INVALID: package.json signature does not match arrow_browser.py + version")
     print(f"OK: signature valid for v{data['version']}")
 
 

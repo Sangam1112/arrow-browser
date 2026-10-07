@@ -10,7 +10,7 @@ import time
 import unittest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-spec = importlib.util.spec_from_file_location("bb", os.path.join(ROOT, "bharat_browser.py"))
+spec = importlib.util.spec_from_file_location("bb", os.path.join(ROOT, "arrow_browser.py"))
 bb = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bb)
 
@@ -80,7 +80,7 @@ class UrlHelperTests(unittest.TestCase):
                 open(os.path.join(d, name), "w").close()
             for name in ("IndexedDB/https_x.com_0.indexeddb.leveldb", "Local Storage/leveldb", "localstorage", "storage"):
                 os.makedirs(os.path.join(d, name))
-            bb.BharatBrowserWindow._cleanup_stale_chromium_artifacts(d)
+            bb.ArrowBrowserWindow._cleanup_stale_chromium_artifacts(d)
             self.assertEqual(sorted(os.listdir(d)), ["cookies.sqlite", "localstorage", "settings.json", "storage"])
         finally:
             shutil.rmtree(d, ignore_errors=True)
@@ -97,6 +97,49 @@ class UrlHelperTests(unittest.TestCase):
             self.assertFalse(bb.running_under_wsl({}, linux))
             self.assertTrue(bb.running_under_wsl({"WSL_DISTRO_NAME": "Ubuntu"}, linux))
             self.assertFalse(bb.running_under_wsl({}, os.path.join(d, "missing")))
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_install_from_before_the_rename_moves_to_the_new_place(self):
+        d = tempfile.mkdtemp()
+        try:
+            legacy, new = os.path.join(d, "bharat-browser"), os.path.join(d, "arrow-browser")
+            os.makedirs(legacy)
+            here = os.path.join(legacy, "bharat_browser.py")
+            with open(here, "w") as f:
+                f.write(f'APP_VERSION = "{bb.APP_VERSION}"\n# this release\n')
+            move = lambda: bb.move_off_legacy_install(here, new, legacy)
+            self.assertIsNone(bb.move_off_legacy_install(os.path.join(d, "elsewhere.py"), new, legacy))
+            target = move()
+            self.assertEqual(target, os.path.join(new, "arrow_browser.py"))
+            self.assertEqual(open(target).read(), open(here).read(), "copied to the new place")
+            self.assertTrue(os.path.exists(here), "the old file stays: older launchers still start it")
+            with open(target, "w") as f:
+                f.write('APP_VERSION = "99.0.0"\n')  # updated since, in the new place
+            self.assertEqual(move(), target)
+            self.assertIn("99.0.0", open(target).read(), "a newer copy is never replaced by an older one")
+            with open(target, "w") as f:
+                f.write('APP_VERSION = "1.0.0"\n')
+            move()
+            self.assertIn("# this release", open(target).read(), "an older copy is replaced")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_data_from_before_the_rename_moves_once(self):
+        d = tempfile.mkdtemp()
+        try:
+            old, new = os.path.join(d, "bharat-browser"), os.path.join(d, "arrow-browser")
+            os.makedirs(old)
+            open(os.path.join(old, "settings.json"), "w").close()
+            bb.move_legacy_data([(old, new)])
+            self.assertTrue(os.path.isfile(os.path.join(new, "settings.json")))
+            self.assertEqual(os.readlink(old), new, "old name links to the new folder")
+            bb.move_legacy_data([(old, new)])  # nothing left to do
+            self.assertTrue(os.path.isfile(os.path.join(new, "settings.json")))
+            other_old, other_new = os.path.join(d, "o1"), os.path.join(d, "o2")
+            os.makedirs(other_old); os.makedirs(other_new)
+            bb.move_legacy_data([(other_old, other_new)])
+            self.assertTrue(os.path.isdir(other_old) and not os.path.islink(other_old), "never merged into existing data")
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
@@ -161,19 +204,19 @@ class UrlHelperTests(unittest.TestCase):
     def test_accessibility_bridge_guard(self):
         self.assertTrue(bb._should_disable_at_bridge({}, screen_reader_running=False))
         self.assertFalse(bb._should_disable_at_bridge({}, screen_reader_running=True), "a screen reader keeps it on")
-        self.assertFalse(bb._should_disable_at_bridge({"BHARAT_ACCESSIBILITY": "1"}, False), "user can opt in")
+        self.assertFalse(bb._should_disable_at_bridge({"ARROW_ACCESSIBILITY": "1"}, False), "user can opt in")
         self.assertFalse(bb._should_disable_at_bridge({"NO_AT_BRIDGE": "0"}, False), "an explicit choice is kept")
         self.assertIsInstance(bb._screen_reader_running(), bool)
 
     def test_fingerprint_script_skips_captcha_frames(self):
         self.assertIn(bb.FARBLING_EXEMPT_JS, bb.FARBLING_JS)
-        self.assertNotIn("__BHARAT_FARBLE_EXEMPT", bb.FARBLING_JS)
+        self.assertNotIn("__ARROW_FARBLE_EXEMPT", bb.FARBLING_JS)
         for domain in ("challenges.cloudflare.com", "recaptcha.net", "hcaptcha.com"):
             self.assertIn(domain, bb.FARBLING_EXEMPT_JS)
 
     def test_fingerprint_script_gets_its_seed(self):
         script = bb.farbling_js(2 ** 32 + 7)
-        self.assertNotIn("__BHARAT_FARBLE_SEED__", script)
+        self.assertNotIn("__ARROW_FARBLE_SEED__", script)
         self.assertIn("2166136261 ^ 7;", script)
         self.assertNotEqual(bb.farbling_js(1), bb.farbling_js(2))
 
@@ -520,12 +563,12 @@ class UrlRulesTests(TmpDirCase):
 
 class LaunchTests(TmpDirCase):
     """Every way of starting the browser goes through the same import-based start, so the compiled code
-    in __pycache__ is reused instead of recompiling bharat_browser.py on each launch."""
-    LAUNCHERS = ("bharat-browser", "install-ubuntu.sh", "install-fedora.sh", "install-wsl.sh")
+    in __pycache__ is reused instead of recompiling arrow_browser.py on each launch."""
+    LAUNCHERS = ("arrow-browser", "install-ubuntu.sh", "install-fedora.sh", "install-wsl.sh")
 
     def fake_app(self, directory):
         os.makedirs(directory, exist_ok=True)
-        write_text(os.path.join(directory, "bharat_browser.py"),
+        write_text(os.path.join(directory, "arrow_browser.py"),
                    "import sys, json\nif __name__ == '__main__':\n    print(json.dumps([__name__, __file__, sys.argv]))\n")
 
     def test_launchers_share_one_start_command(self):
@@ -539,19 +582,19 @@ class LaunchTests(TmpDirCase):
         import subprocess
         app = os.path.join(self.tmp, "app")
         self.fake_app(app)
-        argv = bb.launch_argv(os.path.join(app, "bharat_browser.py"), ["--x", "https://a.example"])
+        argv = bb.launch_argv(os.path.join(app, "arrow_browser.py"), ["--x", "https://a.example"])
         out = json.loads(subprocess.run(argv, capture_output=True, text=True, check=True).stdout)
-        self.assertEqual(out, ["__main__", os.path.join(app, "bharat_browser.py"),
-                               [os.path.join(app, "bharat_browser.py"), "--x", "https://a.example"]])
-        self.assertTrue(any(n.startswith("bharat_browser.") for n in os.listdir(os.path.join(app, "__pycache__"))))
+        self.assertEqual(out, ["__main__", os.path.join(app, "arrow_browser.py"),
+                               [os.path.join(app, "arrow_browser.py"), "--x", "https://a.example"]])
+        self.assertTrue(any(n.startswith("arrow_browser.") for n in os.listdir(os.path.join(app, "__pycache__"))))
 
     def test_launcher_prefers_the_per_user_copy(self):
         import subprocess
-        user_app = os.path.join(self.tmp, ".local", "share", "bharat-browser")
+        user_app = os.path.join(self.tmp, ".local", "share", "arrow-browser")
         self.fake_app(user_app)
-        out = subprocess.run(["bash", os.path.join(ROOT, "bharat-browser"), "https://b.example"],
+        out = subprocess.run(["bash", os.path.join(ROOT, "arrow-browser"), "https://b.example"],
                              capture_output=True, text=True, check=True, env=dict(os.environ, HOME=self.tmp)).stdout
-        self.assertEqual(json.loads(out)[2], [os.path.join(user_app, "bharat_browser.py"), "https://b.example"])
+        self.assertEqual(json.loads(out)[2], [os.path.join(user_app, "arrow_browser.py"), "https://b.example"])
 
 
 class StatsTests(TmpDirCase):
@@ -615,10 +658,31 @@ class UpdateInfoTests(unittest.TestCase):
             self._run([OSError("boom1"), OSError("boom2")])
 
 
-@unittest.skipUnless(os.environ.get("BHARAT_TEST_KEYRING", "1") == "1", "keyring tests disabled")
+@unittest.skipUnless(os.environ.get("ARROW_TEST_KEYRING", "1") == "1", "keyring tests disabled")
 class SecretServiceTests(unittest.TestCase):
+    def test_logins_saved_before_the_rename_are_found_and_moved(self):
+        old = bb.SecretServiceClient(application="arrow-browser-test-old", legacy_applications=())
+        if not old.available():
+            self.skipTest(f"no Secret Service on this machine: {old.error}")
+        new = bb.SecretServiceClient(application="arrow-browser-test", legacy_applications=("arrow-browser-test-old",))
+        host = f"rename-{int(time.time())}.example"
+        try:
+            self.assertTrue(old.store(host, "alice", "before"))
+            found = new.find(host)
+            self.assertEqual([(f["host"], f["username"]) for f in found], [(host, "alice")], "old login still found")
+            self.assertEqual(new.get_password(found[0]["item"]), "before")
+            self.assertTrue(new.store(host, "alice", "after"))
+            self.assertEqual(old.find(host), [], "saved again under the new name, old entry removed")
+            found = new.find(host)
+            self.assertEqual(len(found), 1)
+            self.assertEqual(new.get_password(found[0]["item"]), "after")
+        finally:
+            for client in (old, new):
+                for f in client.find(host):
+                    client.delete(f["item"])
+
     def test_roundtrip_against_real_keyring(self):
-        client = bb.SecretServiceClient(application="bharat-browser-test")
+        client = bb.SecretServiceClient(application="arrow-browser-test")
         if not client.available():
             self.skipTest(f"no Secret Service on this machine: {client.error}")
         host = f"unittest-{int(time.time())}.example"
@@ -702,7 +766,7 @@ class WebProcessCrashTests(unittest.TestCase):
         webview = mock.Mock()
         webview.get_uri.return_value = "https://example.com/"
         with mock.patch.object(bb.GLib, "idle_add", lambda fn: fn()):
-            bb.BharatBrowserWindow.on_web_process_terminated(browser, webview, reason)
+            bb.ArrowBrowserWindow.on_web_process_terminated(browser, webview, reason)
         return webview
 
     def test_crashed_tab_reloads(self):

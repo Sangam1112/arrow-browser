@@ -1,13 +1,15 @@
 <div align="center">
 
-<img src="assets/bharat_icon.png" width="112" alt="Bharat Browser logo">
+<img src="assets/arrow_icon.png" width="112" alt="Arrow Browser logo">
 
-<h1>Bharat Browser</h1>
+<h1>Arrow Browser</h1>
 
-<p><b>A tiny, fast, privacy-first web browser for Linux.<br>Built on WebKitGTK. Made in India.</b></p>
+<p><b>A tiny, fast, privacy-first web browser for Linux.<br>Built on WebKitGTK.</b></p>
 
-[![Latest release](https://img.shields.io/github/v/release/Sangam1112/bharat-browser?label=release&color=blue)](https://github.com/Sangam1112/bharat-browser/releases/latest)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+<p><i>Formerly Bharat Browser. Installed copies update to Arrow Browser by themselves and keep their settings, history and saved passwords.</i></p>
+
+[![Latest release](https://img.shields.io/github/v/release/Sangam1112/arrow-browser?label=release&color=blue)](https://github.com/Sangam1112/arrow-browser/releases/latest)
+[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian%20%7C%20Fedora%20%7C%20RHEL%20family%20%7C%20WSL2-orange.svg)](#-install)
 [![Installer](https://img.shields.io/badge/installer-~104%20KB-brightgreen.svg)](#-small-by-design)
 [![Updates](https://img.shields.io/badge/updates-signed%20(Ed25519)-6366f1.svg)](#-keeping-it-up-to-date)
@@ -18,7 +20,7 @@
 
 ---
 
-## 🌟 Why Bharat Browser?
+## 🌟 Why Arrow Browser?
 
 <table>
   <tr>
@@ -60,7 +62,7 @@ It is a native GTK3 desktop app, not a repackaged Chromium or Electron. The ad b
 
 Measured head-to-head on Linux under identical workloads (`example.com`, `wikipedia.org/wiki/India`, `duckduckgo.com`):
 
-| Metric | Bharat Browser | Ungoogled Chromium | Advantage |
+| Metric | Arrow Browser | Ungoogled Chromium | Advantage |
 | :--- | :---: | :---: | :---: |
 | **Initial Launch (1 Tab)** | **573 MB** | 796 MB | **~28% less RAM** |
 | **Multi-Tab Workload (3 Tabs)** | **942 MB** | 1,235 MB (1.23 GB) | **~24% less RAM** |
@@ -69,7 +71,7 @@ Measured head-to-head on Linux under identical workloads (`example.com`, `wikipe
 | **Package Installer Size** | **~104 KB** (`.deb`) | ~372 MB (Flatpak) | **~3,500× smaller package** |
 | **Installed Disk Footprint** | **~2.3 MB** | ~1.8 GB (with runtime) | **~780× less disk space** |
 
-> **Why the difference?** Bharat Browser leverages the system's native WebKitGTK engine already optimized for Linux, rather than bundling duplicate multi-process Chromium engines and heavy runtime containers. In addition, idle background tabs automatically sleep to keep long sessions responsive on older or resource-constrained hardware.
+> **Why the difference?** Arrow Browser leverages the system's native WebKitGTK engine already optimized for Linux, rather than bundling duplicate multi-process Chromium engines and heavy runtime containers. In addition, idle background tabs automatically sleep to keep long sessions responsive on older or resource-constrained hardware.
 
 ---
 
@@ -108,7 +110,7 @@ Measured head-to-head on Linux under identical workloads (`example.com`, `wikipe
 
 ### Quick install
 
-Packages are on the [**Releases page**](https://github.com/Sangam1112/bharat-browser/releases/latest). Replace the version if a newer one is out.
+Packages are on the [**Releases page**](https://github.com/Sangam1112/arrow-browser/releases/latest). Replace the version if a newer one is out.
 
 <table>
 <tr><th>Ubuntu / Debian / Mint</th><th>Fedora / RHEL family</th></tr>
@@ -116,37 +118,37 @@ Packages are on the [**Releases page**](https://github.com/Sangam1112/bharat-bro
 
 ```bash
 VERSION=1.5.19
-wget https://github.com/Sangam1112/bharat-browser/releases/download/v$VERSION/bharat-browser_${VERSION}-1_all.deb
-sudo apt install ./bharat-browser_${VERSION}-1_all.deb
+wget https://github.com/Sangam1112/arrow-browser/releases/download/v$VERSION/arrow-browser_${VERSION}-1_all.deb
+sudo apt install ./arrow-browser_${VERSION}-1_all.deb
 ```
 
 </td><td>
 
 ```bash
 VERSION=1.5.19
-wget https://github.com/Sangam1112/bharat-browser/releases/download/v$VERSION/bharat-browser-${VERSION}-1.noarch.rpm
-sudo dnf install ./bharat-browser-${VERSION}-1.noarch.rpm
+wget https://github.com/Sangam1112/arrow-browser/releases/download/v$VERSION/arrow-browser-${VERSION}-1.noarch.rpm
+sudo dnf install ./arrow-browser-${VERSION}-1.noarch.rpm
 ```
 
 </td></tr>
 </table>
 
-Use `apt install ./file.deb` (not `dpkg -i`) so the GTK and WebKit dependencies are resolved automatically. Then start it from your application menu, or run `bharat-browser`.
+Use `apt install ./file.deb` (not `dpkg -i`) so the GTK and WebKit dependencies are resolved automatically. Then start it from your application menu, or run `arrow-browser`.
 
-> **Red Hat family (RHEL, Rocky Linux, AlmaLinux, CentOS Stream):** supported since 1.4.2. Fedora calls the WebKit package `webkit2gtk4.1` and these systems call it `webkit2gtk3`; the RPM and `install-fedora.sh` accept either, and the app itself works with WebKit2GTK 4.1 or 4.0. The install logic is covered by automated tests, but it hasn't been run on a real RHEL-family machine yet. If you try it, please tell us how it went in [issues](https://github.com/Sangam1112/bharat-browser/issues).
+> **Red Hat family (RHEL, Rocky Linux, AlmaLinux, CentOS Stream):** supported since 1.4.2. Fedora calls the WebKit package `webkit2gtk4.1` and these systems call it `webkit2gtk3`; the RPM and `install-fedora.sh` accept either, and the app itself works with WebKit2GTK 4.1 or 4.0. The install logic is covered by automated tests, but it hasn't been run on a real RHEL-family machine yet. If you try it, please tell us how it went in [issues](https://github.com/Sangam1112/arrow-browser/issues).
 
 ### Install from source (no root needed)
 
 This installs for your user only (`~/.local`) and gives you the self-updater:
 
 ```bash
-git clone https://github.com/Sangam1112/bharat-browser.git
-cd bharat-browser
+git clone https://github.com/Sangam1112/arrow-browser.git
+cd arrow-browser
 ./install-ubuntu.sh        # Ubuntu / Debian / Mint
 ./install-fedora.sh        # Fedora, RHEL, Rocky, AlmaLinux, CentOS Stream
 ```
 
-Add `--system` to install for all users instead (it asks for `sudo`). If `bharat-browser` isn't found in a new terminal, add this to `~/.bashrc`:
+Add `--system` to install for all users instead (it asks for `sudo`). If `arrow-browser` isn't found in a new terminal, add this to `~/.bashrc`:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -157,17 +159,17 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ```bash
 VERSION=1.5.19
-wget https://github.com/Sangam1112/bharat-browser/releases/download/v$VERSION/bharat-browser_${VERSION}_fedora.tar.gz
-mkdir -p /tmp/bharat_fedora
-tar -xzf bharat-browser_${VERSION}_fedora.tar.gz -C /tmp/bharat_fedora
-cd /tmp/bharat_fedora && ./install-fedora.sh
+wget https://github.com/Sangam1112/arrow-browser/releases/download/v$VERSION/arrow-browser_${VERSION}_fedora.tar.gz
+mkdir -p /tmp/arrow_fedora
+tar -xzf arrow-browser_${VERSION}_fedora.tar.gz -C /tmp/arrow_fedora
+cd /tmp/arrow_fedora && ./install-fedora.sh
 ```
 </details>
 
 <details>
 <summary><b>Windows 10/11</b> (via WSL2 + WSLg)</summary>
 
-There is no native Windows build. Bharat Browser runs inside **WSL2** and opens as its own window on the Windows desktop through **WSLg** (Windows 11, or Windows 10 build 19044+).
+There is no native Windows build. Arrow Browser runs inside **WSL2** and opens as its own window on the Windows desktop through **WSLg** (Windows 11, or Windows 10 build 19044+).
 
 **1. Prepare Windows**
 
@@ -208,17 +210,17 @@ This brings Ubuntu's graphics and WebKit libraries up to date before the browser
 **5. Install (Ubuntu terminal)**
 
 ```bash
-git clone https://github.com/Sangam1112/bharat-browser.git
-cd bharat-browser
+git clone https://github.com/Sangam1112/arrow-browser.git
+cd arrow-browser
 ./install-wsl.sh
 ```
 
-The script uses `sudo apt` (it will ask for your Linux password) to install Python, GTK3, WebKit2GTK and git, then installs the browser to `~/.local/share/bharat-browser` and a launcher at `~/.local/bin/bharat-browser`.
+The script uses `sudo apt` (it will ask for your Linux password) to install Python, GTK3, WebKit2GTK and git, then installs the browser to `~/.local/share/arrow-browser` and a launcher at `~/.local/bin/arrow-browser`.
 
 **6. Run it**
 
 ```bash
-bharat-browser
+arrow-browser
 ```
 
 If the command isn't found, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc` and open a new terminal. Later, use **Settings → About → Check for updates** to stay current.
@@ -229,22 +231,22 @@ So you can start the browser by double-clicking an icon instead of opening Ubunt
 
 ```bash
 WIN_APPDATA="$(wslpath "$(cmd.exe /c 'echo %LOCALAPPDATA%' 2>/dev/null | tr -d '\r')")"
-mkdir -p "$WIN_APPDATA/BharatBrowser"
+mkdir -p "$WIN_APPDATA/ArrowBrowser"
 python3 -c 'import struct,sys; p=open(sys.argv[1],"rb").read(); open(sys.argv[2],"wb").write(struct.pack("<3H4B2H2I",0,1,1,0,0,0,0,1,32,len(p),22)+p)' \
-  ~/.local/share/bharat-browser/assets/bharat_icon.png "$WIN_APPDATA/BharatBrowser/bharat-browser.ico"
+  ~/.local/share/arrow-browser/assets/arrow_icon.png "$WIN_APPDATA/ArrowBrowser/arrow-browser.ico"
 ```
 
 Then in **PowerShell** (a normal one, not Administrator), create the shortcut:
 
 ```powershell
-$s = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\Bharat Browser.lnk")
+$s = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\Arrow Browser.lnk")
 $s.TargetPath = "C:\Program Files\WSL\wslg.exe"
-$s.Arguments = "-d Ubuntu --cd ~ -- bash -lc bharat-browser"
-$s.IconLocation = "$env:LOCALAPPDATA\BharatBrowser\bharat-browser.ico"
+$s.Arguments = "-d Ubuntu --cd ~ -- bash -lc arrow-browser"
+$s.IconLocation = "$env:LOCALAPPDATA\ArrowBrowser\arrow-browser.ico"
 $s.Save()
 ```
 
-A **Bharat Browser** icon appears on your desktop. `wslg.exe` starts the browser without leaving a terminal window open. To pin it, right-click the icon (on Windows 11, then *Show more options*) → **Pin to taskbar** or **Pin to Start**.
+A **Arrow Browser** icon appears on your desktop. `wslg.exe` starts the browser without leaving a terminal window open. To pin it, right-click the icon (on Windows 11, then *Show more options*) → **Pin to taskbar** or **Pin to Start**.
 
 - If your Ubuntu has a different name in `wsl -l -v` (for example `Ubuntu-24.04`), put that name after `-d` instead.
 - If Windows says it can't find `wslg.exe`, your WSL is out of date: go back to step 2.
@@ -253,10 +255,10 @@ A **Bharat Browser** icon appears on your desktop. `wslg.exe` starts the browser
 **Troubleshooting**
 
 - *No window appears:* check that WSLg works with `sudo apt install -y x11-apps && xeyes`. If that doesn't open either, run `wsl --update` and `wsl --shutdown` in PowerShell, then reopen Ubuntu.
-- *Blank or white window:* try `WEBKIT_DISABLE_DMABUF_RENDERER=1 bharat-browser`, a common workaround for WebKitGTK under WSLg.
+- *Blank or white window:* try `WEBKIT_DISABLE_DMABUF_RENDERER=1 arrow-browser`, a common workaround for WebKitGTK under WSLg.
 - *Saving passwords doesn't work:* the password manager needs a system keyring. Run `sudo apt install -y gnome-keyring`. Everything else works without it.
 
-> The WSL installer's logic is the same as the Ubuntu one, but it hasn't been tested on a real Windows machine yet. If you try it, please tell us how it went in [issues](https://github.com/Sangam1112/bharat-browser/issues).
+> The WSL installer's logic is the same as the Ubuntu one, but it hasn't been tested on a real Windows machine yet. If you try it, please tell us how it went in [issues](https://github.com/Sangam1112/arrow-browser/issues).
 </details>
 
 ---
@@ -264,22 +266,22 @@ A **Bharat Browser** icon appears on your desktop. `wslg.exe` starts the browser
 ## 🔄 Keeping it up to date
 
 - **Source or user install:** open **Settings → About → Check for updates**. If a newer release exists it is downloaded, its signature is verified, and you just click **Restart now**. The browser also checks quietly about 30 seconds after launch.
-- **`.deb` / `.rpm` installs:** the same button works (updates go to `~/.local/share/bharat-browser`, which the launcher prefers), or install the newer package from the [Releases page](https://github.com/Sangam1112/bharat-browser/releases/latest).
+- **`.deb` / `.rpm` installs:** the same button works (updates go to `~/.local/share/arrow-browser`, which the launcher prefers), or install the newer package from the [Releases page](https://github.com/Sangam1112/arrow-browser/releases/latest).
 - A release that is **not signed by the project key is never installed**, even if the download itself were tampered with.
 
 ## 🗑️ Uninstall
 
 ```bash
-sudo apt remove bharat-browser          # Debian / Ubuntu package
-sudo dnf remove bharat-browser          # Fedora package
+sudo apt remove arrow-browser          # Debian / Ubuntu package
+sudo dnf remove arrow-browser          # Fedora package
 
 # user install / self-updated copy
-rm -rf ~/.local/share/bharat-browser ~/.local/bin/bharat-browser \
-       ~/.local/share/applications/bharat-browser.desktop \
-       ~/.local/share/icons/hicolor/256x256/apps/bharat-browser.png
+rm -rf ~/.local/share/arrow-browser ~/.local/bin/arrow-browser \
+       ~/.local/share/applications/arrow-browser.desktop \
+       ~/.local/share/icons/hicolor/256x256/apps/arrow-browser.png
 
 # your data (history, bookmarks, settings, cookies) and cache
-rm -rf ~/.config/bharat-browser ~/.cache/bharat-browser
+rm -rf ~/.config/arrow-browser ~/.cache/arrow-browser
 ```
 
 Saved passwords are in your system keyring, not in those folders: remove them first from **Settings → Privacy & Security → Saved passwords**.
@@ -299,13 +301,13 @@ Saved passwords are in your system keyring, not in those folders: remove them fi
 | Back / forward | `Alt+←` / `Alt+→` | Zoom in / out / reset | `Ctrl++` / `Ctrl+-` / `Ctrl+0` |
 | Reload | `F5` or `Ctrl+R` | Developer inspector* | `F12` or `Ctrl+Shift+I` |
 
-\* Off by default. To turn it on, set `"dev_tools_enabled": true` in `~/.config/bharat-browser/settings.json` and restart. Touchpad swipe also goes back/forward.
+\* Off by default. To turn it on, set `"dev_tools_enabled": true` in `~/.config/arrow-browser/settings.json` and restart. Touchpad swipe also goes back/forward.
 
 ---
 
 ## 🔒 Privacy & what it connects to
 
-Bharat Browser has **no telemetry, analytics or accounts**. Besides the sites you visit, it makes only these connections itself:
+Arrow Browser has **no telemetry, analytics or accounts**. Besides the sites you visit, it makes only these connections itself:
 
 | What | To | When | Turn off |
 |---|---|---|---|
@@ -314,9 +316,9 @@ Bharat Browser has **no telemetry, analytics or accounts**. Besides the sites yo
 | Link-cleaning rules | `rules2.clearurls.xyz` (or `gitlab.com` if that's down) | About once a week | Same switch |
 | Link / DNS prefetch | the pages you hover over | While browsing | n/a |
 
-**Where your data lives:** settings, history, bookmarks, session, per-site settings, cookies and statistics are in `~/.config/bharat-browser` (readable only by you); cache in `~/.cache/bharat-browser`; passwords only in your system keyring. Private windows write none of it to disk.
+**Where your data lives:** settings, history, bookmarks, session, per-site settings, cookies and statistics are in `~/.config/arrow-browser` (readable only by you); cache in `~/.cache/arrow-browser`; passwords only in your system keyring. Private windows write none of it to disk.
 
-Spotted a security problem? Please open a [GitHub issue](https://github.com/Sangam1112/bharat-browser/issues), or contact the maintainer privately if it's sensitive.
+Spotted a security problem? Please open a [GitHub issue](https://github.com/Sangam1112/arrow-browser/issues), or contact the maintainer privately if it's sensitive.
 
 ---
 
@@ -324,16 +326,16 @@ Spotted a security problem? Please open a [GitHub issue](https://github.com/Sang
 
 | Browser | Installer size | Installed size (approx.) |
 |---|---|---|
-| **Bharat Browser** | **~104 KB** (RPM) / **~90 KB** (.deb) | **~310 KB** |
+| **Arrow Browser** | **~104 KB** (RPM) / **~90 KB** (.deb) | **~310 KB** |
 | Google Chrome | ~90–100 MB | ~250–350 MB |
 | Mozilla Firefox | ~55–75 MB | ~200–300 MB |
 | Chromium | ~100–150 MB | ~300–400 MB |
 | Brave | ~90–110 MB | ~300+ MB |
 | Microsoft Edge (Linux) | ~90–100 MB | ~250–350 MB |
 
-That's roughly **500–1000× smaller**. Chrome, Firefox, Chromium, Brave and Edge each bundle a complete rendering engine (Blink + V8, or Gecko + SpiderMonkey), typically 150–250 MB on its own. Bharat Browser ships none of that: it's a ~295 KB Python/GTK3 program that calls into **WebKitGTK**, a system library most Linux desktops already have for other GTK apps, from the same engine family as Safari.
+That's roughly **500–1000× smaller**. Chrome, Firefox, Chromium, Brave and Edge each bundle a complete rendering engine (Blink + V8, or Gecko + SpiderMonkey), typically 150–250 MB on its own. Arrow Browser ships none of that: it's a ~295 KB Python/GTK3 program that calls into **WebKitGTK**, a system library most Linux desktops already have for other GTK apps, from the same engine family as Safari.
 
-> Bharat Browser's sizes were measured from the v1.5.1 release packages. The other browsers' figures are well-known public approximations that vary by version and platform.
+> Arrow Browser's sizes were measured from the v1.5.1 release packages. The other browsers' figures are well-known public approximations that vary by version and platform.
 
 ---
 
@@ -343,4 +345,4 @@ Built on [WebKitGTK](https://webkitgtk.org/) and [PyGObject](https://pygobject.g
 
 ## 📄 License
 
-[MIT](LICENSE) © 2026 Sangam1112
+© 2026 Sangam1112. Arrow Browser is free software under the [GNU General Public License v3.0 or later](LICENSE): you may use, study, share and change it, but anything you distribute that is based on it must be released under the same license, with its source code. Versions up to 1.5.19 were released under the MIT License.

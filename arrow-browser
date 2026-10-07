@@ -1,0 +1,22 @@
+#!/bin/bash
+# Arrow Browser Fedora / Linux Launcher
+# Copyright (C) 2026 Sangam1112. SPDX-License-Identifier: GPL-3.0-or-later
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Start through an import so Python reuses the compiled code it keeps in __pycache__: running
+# arrow_browser.py directly would recompile all of it on every launch (~0.25 s).
+run() { exec python3 -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("arrow_browser", run_name="__main__", alter_sys=True)' "$@"; }
+
+# User-writable install checked first: it's the only copy the browser's
+# self-updater can actually rewrite in place. A root-owned /usr/share install
+# (this RPM's own default) is left as a fallback.
+if [ -f "${HOME}/.local/share/arrow-browser/arrow_browser.py" ]; then
+    run "${HOME}/.local/share/arrow-browser" "$@"
+elif [ -f "/usr/share/arrow-browser/arrow_browser.py" ]; then
+    run /usr/share/arrow-browser "$@"
+elif [ -f "${SCRIPT_DIR}/arrow_browser.py" ]; then
+    run "${SCRIPT_DIR}" "$@"
+else
+    echo "arrow-browser: no installed copy found in ~/.local/share/arrow-browser or /usr/share/arrow-browser." >&2
+    echo "Reinstall Arrow Browser from https://github.com/Sangam1112/arrow-browser/releases" >&2
+    exit 1
+fi

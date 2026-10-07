@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
+All notable changes to Arrow Browser (called Bharat Browser up to 1.5.19). Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
 ## [1.5.19] - 2026-10-07

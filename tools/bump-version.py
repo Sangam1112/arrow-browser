@@ -3,7 +3,7 @@
 
   tools/bump-version.py 1.4.1 "One-line summary of the changes"
 
-Updates package.json, bharat_browser.py (header + APP_VERSION), the README
+Updates package.json, arrow_browser.py (header + APP_VERSION), the README
 (badge and install examples), CHANGELOG.md and the RPM changelog. The build
 scripts read the version from package.json, so nothing else needs editing.
 Run the build scripts afterwards: they refresh the checksum and sign the release.
@@ -43,10 +43,10 @@ def main():
     pkg["version"] = new
     write("package.json", json.dumps(pkg, indent=2) + "\n")
 
-    py = read("bharat_browser.py")
-    py = py.replace(f"Bharat Browser v{old} - ", f"Bharat Browser v{new} - ", 1)
+    py = read("arrow_browser.py")
+    py = py.replace(f"Arrow Browser v{old} - ", f"Arrow Browser v{new} - ", 1)
     py = py.replace(f'APP_VERSION = "{old}"', f'APP_VERSION = "{new}"', 1)
-    write("bharat_browser.py", py)
+    write("arrow_browser.py", py)
 
     # Only the install commands carry a version; a blanket replace would also rewrite
     # true historical statements such as "supported since 1.4.2".
@@ -54,7 +54,7 @@ def main():
 
     now = datetime.datetime.now()
     rpm = read("build-rpm.sh")
-    entry = f"* {now.strftime('%a %b %d %Y')} Bharat Browser Developer <developer@bharatbrowser.org> - {new}-1\n- {summary}\n"
+    entry = f"* {now.strftime('%a %b %d %Y')} Arrow Browser Developer <Sangam1112@users.noreply.github.com> - {new}-1\n- {summary}\n"
     rpm = rpm.replace("%changelog\n", "%changelog\n" + entry, 1)
     write("build-rpm.sh", rpm)
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the updater's Ed25519 verification (bharat_browser.py) against RFC 8032
+"""Tests for the updater's Ed25519 verification (arrow_browser.py) against RFC 8032
 vectors and the `cryptography` package, which signs exactly like tools/sign-release.py."""
 import hashlib
 import os
@@ -7,7 +7,7 @@ import re
 import unittest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-SRC = open(os.path.join(ROOT, "bharat_browser.py")).read()
+SRC = open(os.path.join(ROOT, "arrow_browser.py")).read()
 
 # Load only the verification code; importing the whole browser needs GTK/WebKit.
 ns = {"hashlib": hashlib}

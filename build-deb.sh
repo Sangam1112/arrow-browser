@@ -16,7 +16,7 @@ bash tools/update-checksum.sh
 python3 tools/check-version.py
 
 VERSION="$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')"
-PKG_NAME="bharat-browser"
+PKG_NAME="arrow-browser"
 OUTPUT_DIR="${OUTPUT_DIR:-$HOME/Downloads}"
 # A fresh private folder (not a fixed /tmp name another local user could create or swap first), made
 # world-readable like the package tree it holds.
@@ -27,25 +27,29 @@ trap 'rm -rf "$BUILD_ROOT" "$DEB_ROOT"' EXIT
 
 echo "Building .deb package for ${PKG_NAME} v${VERSION}..."
 
-mkdir -p "${BUILD_ROOT}/usr/share/bharat-browser/assets"
+mkdir -p "${BUILD_ROOT}/usr/share/arrow-browser/assets"
 mkdir -p "${BUILD_ROOT}/usr/bin"
 mkdir -p "${BUILD_ROOT}/usr/share/applications"
 mkdir -p "${BUILD_ROOT}/usr/share/icons/hicolor/256x256/apps"
 mkdir -p "${BUILD_ROOT}/DEBIAN"
 
-cp bharat_browser.py "${BUILD_ROOT}/usr/share/bharat-browser/"
-cp -r assets/* "${BUILD_ROOT}/usr/share/bharat-browser/assets/"
-cp bharat-browser "${BUILD_ROOT}/usr/bin/bharat-browser"
-cp bharat-browser.desktop "${BUILD_ROOT}/usr/share/applications/"
-cp assets/bharat_icon.png "${BUILD_ROOT}/usr/share/icons/hicolor/256x256/apps/bharat-browser.png"
+cp arrow_browser.py "${BUILD_ROOT}/usr/share/arrow-browser/"
+cp -r assets/* "${BUILD_ROOT}/usr/share/arrow-browser/assets/"
+cp arrow-browser "${BUILD_ROOT}/usr/bin/arrow-browser"
+cp arrow-browser.desktop "${BUILD_ROOT}/usr/share/applications/"
+cp assets/arrow_icon.png "${BUILD_ROOT}/usr/share/icons/hicolor/256x256/apps/arrow-browser.png"
+mkdir -p "${BUILD_ROOT}/usr/share/doc/arrow-browser"
+cp LICENSE "${BUILD_ROOT}/usr/share/doc/arrow-browser/copyright"  # the GPL goes with every copy
 
-chmod +x "${BUILD_ROOT}/usr/bin/bharat-browser" "${BUILD_ROOT}/usr/share/bharat-browser/bharat_browser.py"
+chmod +x "${BUILD_ROOT}/usr/bin/arrow-browser" "${BUILD_ROOT}/usr/share/arrow-browser/arrow_browser.py"
+# The command before the rename keeps working (menu entries, scripts, wrappers that call it).
+ln -s arrow-browser "${BUILD_ROOT}/usr/bin/bharat-browser"
 
 # Installed size in KiB, as the control file's Installed-Size field expects.
 INSTALLED_SIZE_KB=$(du -sk "$BUILD_ROOT" --exclude="$BUILD_ROOT/DEBIAN" | cut -f1)
 
 cat <<EOF > "${BUILD_ROOT}/DEBIAN/control"
-Package: bharat-browser
+Package: arrow-browser
 Version: ${VERSION}
 Section: web
 Priority: optional
@@ -53,26 +57,29 @@ Architecture: all
 Installed-Size: ${INSTALLED_SIZE_KB}
 Depends: python3, python3-gi, python3-gi-cairo, gir1.2-gtk-3.0, gir1.2-webkit2-4.1 | gir1.2-webkit2-4.0
 Suggests: gnome-keyring | keepassxc | kwalletmanager, hunspell-en-us | hunspell-en-gb
-Maintainer: Bharat Browser Developer <developer@bharatbrowser.org>
-Homepage: https://github.com/Sangam1112/bharat-browser
+Provides: bharat-browser
+Replaces: bharat-browser
+Conflicts: bharat-browser
+Maintainer: Arrow Browser Developer <Sangam1112@users.noreply.github.com>
+Homepage: https://github.com/Sangam1112/arrow-browser
 Description: Modern, Ultra-Fast, and Privacy-First Web Browser
- Bharat Browser is a modern, high-performance web browser designed with
+ Arrow Browser is a modern, high-performance web browser designed with
  strict security, privacy protection, and site compatibility at its core.
  GTK3 + WebKit2GTK desktop application with a custom ad/tracker blocklist,
  tracking-parameter stripping, HTTPS upgrading, and a DarkReader-style
  dark mode, all built in-house.
 EOF
 
-# Precompile on install so launches don't recompile bharat_browser.py each time (~0.25 s): users can't write
+# Precompile on install so launches don't recompile arrow_browser.py each time (~0.25 s): users can't write
 # a __pycache__ into /usr/share themselves. A failure here must never fail the install.
 cat <<'EOF' > "${BUILD_ROOT}/DEBIAN/postinst"
 #!/bin/sh
-python3 -m py_compile /usr/share/bharat-browser/bharat_browser.py >/dev/null 2>&1 || true
+python3 -m py_compile /usr/share/arrow-browser/arrow_browser.py >/dev/null 2>&1 || true
 exit 0
 EOF
 cat <<'EOF' > "${BUILD_ROOT}/DEBIAN/prerm"
 #!/bin/sh
-rm -rf /usr/share/bharat-browser/__pycache__
+rm -rf /usr/share/arrow-browser/__pycache__
 exit 0
 EOF
 chmod 755 "${BUILD_ROOT}/DEBIAN/postinst" "${BUILD_ROOT}/DEBIAN/prerm"
@@ -87,7 +94,7 @@ tar --numeric-owner --owner=0 --group=0 -czf "${DEB_ROOT}/data.tar.gz" \
     -C "$BUILD_ROOT" --exclude="./DEBIAN" .
 
 mkdir -p "$OUTPUT_DIR"
-DEB_FILE="${OUTPUT_DIR}/bharat-browser_${VERSION}-1_all.deb"
+DEB_FILE="${OUTPUT_DIR}/arrow-browser_${VERSION}-1_all.deb"
 rm -f "$DEB_FILE"
 
 # Debian binary package format: an ar archive of exactly these three

@@ -1,4 +1,4 @@
-; Bharat Browser Setup for Windows 10/11. Bharat Browser is a Linux (GTK + WebKitGTK) app,
+; Arrow Browser Setup for Windows 10/11. Arrow Browser is a Linux (GTK + WebKitGTK) app,
 ; so Setup installs its .deb package into Ubuntu on WSL 2 (setup.ps1 does that part, in a
 ; window of its own) and adds Windows shortcuts that open it through WSLg.
 ; Built on Linux by build-windows-installer.sh, which passes the defines below.
@@ -19,9 +19,9 @@ Unicode true
 !insertmacro Require LICENSE
 !insertmacro Require OUTFILE
 
-!define APP "Bharat Browser"
-!define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\BharatBrowser"
-!define SETTINGS_KEY "Software\Bharat Browser"
+!define APP "Arrow Browser"
+!define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\ArrowBrowser"
+!define SETTINGS_KEY "Software\Arrow Browser"
 
 Name "${APP}"
 OutFile "${OUTFILE}"
@@ -35,7 +35,7 @@ VIAddVersionKey "ProductName" "${APP}"
 VIAddVersionKey "ProductVersion" "${VERSION}"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "FileDescription" "${APP} Setup"
-VIAddVersionKey "LegalCopyright" "MIT License"
+VIAddVersionKey "LegalCopyright" "(C) 2026 Sangam1112. GPL-3.0-or-later"
 
 !define MUI_ICON "${ICON}"
 !define MUI_UNICON "${ICON}"
@@ -70,15 +70,15 @@ FunctionEnd
 
 Section "Install"
   SetOutPath "$INSTDIR"
-  File "/oname=bharat-browser.deb" "${DEB}"
-  File "/oname=bharat-browser.ico" "${ICON}"
+  File "/oname=arrow-browser.deb" "${DEB}"
+  File "/oname=arrow-browser.ico" "${ICON}"
   File "setup.ps1"
   File "wsl-setup.sh"
 
   DetailPrint "Setting up WSL, Ubuntu and ${APP} in a separate window. Follow the instructions there."
   ; Setup is a 32-bit program: without this, $SYSDIR is SysWOW64, whose 32-bit PowerShell can't find wsl.exe.
   ${DisableX64FSRedirection}
-  ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\setup.ps1" -Package "$INSTDIR\bharat-browser.deb" -ResultFile "$INSTDIR\distro.txt"' $0
+  ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\setup.ps1" -Package "$INSTDIR\arrow-browser.deb" -ResultFile "$INSTDIR\distro.txt"' $0
   ${EnableX64FSRedirection}
   ${If} $0 == 3010
     MessageBox MB_ICONINFORMATION "WSL has been installed. Restart your PC, then run ${APP} Setup again to finish."
@@ -101,18 +101,18 @@ Section "Install"
     ${EndIf}
   ${Loop}
   Delete "$INSTDIR\distro.txt"
-  Delete "$INSTDIR\bharat-browser.deb"
+  Delete "$INSTDIR\arrow-browser.deb"
 
   ; wslg.exe opens a Linux GUI app without leaving a console window open. Without it
   ; (an old WSL), wsl.exe does the same with a console window, kept minimized.
   StrCpy $Launcher "$PROGRAMFILES64\WSL\wslg.exe"
   ${If} ${FileExists} "$Launcher"
-    CreateShortCut "$DESKTOP\${APP}.lnk" "$Launcher" "-d $Distro --cd ~ -- bharat-browser" "$INSTDIR\bharat-browser.ico" 0
-    CreateShortCut "$SMPROGRAMS\${APP}.lnk" "$Launcher" "-d $Distro --cd ~ -- bharat-browser" "$INSTDIR\bharat-browser.ico" 0
+    CreateShortCut "$DESKTOP\${APP}.lnk" "$Launcher" "-d $Distro --cd ~ -- arrow-browser" "$INSTDIR\arrow-browser.ico" 0
+    CreateShortCut "$SMPROGRAMS\${APP}.lnk" "$Launcher" "-d $Distro --cd ~ -- arrow-browser" "$INSTDIR\arrow-browser.ico" 0
   ${Else}
     StrCpy $Launcher "$WINDIR\System32\wsl.exe"
-    CreateShortCut "$DESKTOP\${APP}.lnk" "$Launcher" "-d $Distro --cd ~ -- bharat-browser" "$INSTDIR\bharat-browser.ico" 0 SW_SHOWMINIMIZED
-    CreateShortCut "$SMPROGRAMS\${APP}.lnk" "$Launcher" "-d $Distro --cd ~ -- bharat-browser" "$INSTDIR\bharat-browser.ico" 0 SW_SHOWMINIMIZED
+    CreateShortCut "$DESKTOP\${APP}.lnk" "$Launcher" "-d $Distro --cd ~ -- arrow-browser" "$INSTDIR\arrow-browser.ico" 0 SW_SHOWMINIMIZED
+    CreateShortCut "$SMPROGRAMS\${APP}.lnk" "$Launcher" "-d $Distro --cd ~ -- arrow-browser" "$INSTDIR\arrow-browser.ico" 0 SW_SHOWMINIMIZED
   ${EndIf}
 
   WriteRegStr HKLM "${SETTINGS_KEY}" "Distro" "$Distro"
@@ -120,8 +120,8 @@ Section "Install"
   WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayName" "${APP}"
   WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr HKLM "${UNINSTALL_KEY}" "Publisher" "${APP}"
-  WriteRegStr HKLM "${UNINSTALL_KEY}" "URLInfoAbout" "https://github.com/Sangam1112/bharat-browser"
-  WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\bharat-browser.ico"
+  WriteRegStr HKLM "${UNINSTALL_KEY}" "URLInfoAbout" "https://github.com/Sangam1112/arrow-browser"
+  WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\arrow-browser.ico"
   WriteRegStr HKLM "${UNINSTALL_KEY}" "UninstallString" '"$INSTDIR\Uninstall.exe"'
   WriteRegStr HKLM "${UNINSTALL_KEY}" "QuietUninstallString" '"$INSTDIR\Uninstall.exe" /S'
   WriteRegDWORD HKLM "${UNINSTALL_KEY}" "NoModify" 1
@@ -129,19 +129,19 @@ Section "Install"
 SectionEnd
 
 ; Removes the browser and the shortcuts. WSL, Ubuntu and your browser data inside Ubuntu
-; (~/.config/bharat-browser) stay, since you may use them for other things.
+; (~/.config/arrow-browser) stay, since you may use them for other things.
 Section "Uninstall"
   ReadRegStr $Distro HKLM "${SETTINGS_KEY}" "Distro"
   ${If} $Distro != ""
     DetailPrint "Removing ${APP} from $Distro..."
     ${DisableX64FSRedirection}
-    nsExec::ExecToLog '"$SYSDIR\wsl.exe" -d $Distro -u root -- apt-get remove -y bharat-browser'
+    nsExec::ExecToLog '"$SYSDIR\wsl.exe" -d $Distro -u root -- apt-get remove -y arrow-browser'
     Pop $0
     ${EnableX64FSRedirection}
   ${EndIf}
   Delete "$DESKTOP\${APP}.lnk"
   Delete "$SMPROGRAMS\${APP}.lnk"
-  Delete "$INSTDIR\bharat-browser.ico"
+  Delete "$INSTDIR\arrow-browser.ico"
   Delete "$INSTDIR\setup.ps1"
   Delete "$INSTDIR\wsl-setup.sh"
   Delete "$INSTDIR\Uninstall.exe"
