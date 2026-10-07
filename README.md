@@ -14,7 +14,7 @@
 [![Installer](https://img.shields.io/badge/installer-~120%20KB-brightgreen.svg)](#-small-by-design)
 [![Updates](https://img.shields.io/badge/updates-signed%20(Ed25519)-6366f1.svg)](#-keeping-it-up-to-date)
 
-[**Highlights**](#-highlights) · [**Benchmarks**](#-benchmarks-vs-ungoogled-chromium) · [**Install**](#-install) · [**Update**](#-keeping-it-up-to-date) · [**Shortcuts**](#-keyboard-shortcuts) · [**Privacy**](#-privacy--what-it-connects-to)
+[**Highlights**](#-highlights) · [**Benchmarks**](#-benchmarks) · [**Install**](#-install) · [**Update**](#-keeping-it-up-to-date) · [**Shortcuts**](#-keyboard-shortcuts) · [**Privacy**](#-privacy--what-it-connects-to)
 
 </div>
 
@@ -65,20 +65,38 @@ It is a native GTK3 desktop app, not a repackaged Chromium or Electron. The ad b
 
 ---
 
-## 📊 Benchmarks vs Ungoogled Chromium
+## 📊 Benchmarks
 
-Measured head-to-head on Linux under identical workloads (`example.com`, `wikipedia.org/wiki/India`, `duckduckgo.com`):
+Arrow Browser 1.6.0 against Firefox 157, Brave 1.96 and Ungoogled Chromium 150, tested in October 2026 on a low-power laptop (AMD E2-7110, 4 cores at 1.8 GHz, 6.7 GB RAM, Linux Lite / XFCE). **Bold** marks the best result in each row.
 
-| Metric | Arrow Browser | Ungoogled Chromium | Advantage |
-| :--- | :---: | :---: | :---: |
-| **Initial Launch (1 Tab)** | **573 MB** | 796 MB | **~28% less RAM** |
-| **Multi-Tab Workload (3 Tabs)** | **942 MB** | 1,235 MB (1.23 GB) | **~24% less RAM** |
-| **Processes Spawned (1 Tab)** | **9** | 13 | 30% fewer helper processes |
-| **Processes Spawned (3 Tabs)** | **11** | 15 | Lower scheduler contention |
-| **Package Installer Size** | **~117 KB** (`.deb`) | ~372 MB (Flatpak) | **~3,200× smaller package** |
-| **Installed Disk Footprint** | **~2.3 MB** | ~1.8 GB (with runtime) | **~780× less disk space** |
+| Test | Arrow | Firefox | Brave | Ungoogled Chromium |
+| :--- | :---: | :---: | :---: | :---: |
+| **Speedometer 3.1** (responsiveness, higher is better) | 1.57 | 1.83 | **3.27** | 2.27 |
+| **Startup time** (lower is better) | 2.91 s | 8.11 s | **2.32 s** | 2.65 s |
+| **Memory, one simple page** | **234 MB** | 642 MB | 385 MB | 405 MB |
+| **Memory, one heavy page** (4 web apps) | 485 MB | 717 MB | **458 MB** | 483 MB |
+| **Memory, 6 tabs** | 688 MB | 764 MB | **498 MB** | 520 MB |
+| **Engine tests** (JS, WebAssembly, DOM, canvas; average % of the fastest) | 66% | 61% | **85%** | 69% |
+| **Web features supported** (of 38 checked) | 25 | 34 | **35** | **35** |
 
-> **Why the difference?** Arrow Browser leverages the system's native WebKitGTK engine already optimized for Linux, rather than bundling duplicate multi-process Chromium engines and heavy runtime containers. In addition, idle background tabs automatically sleep to keep long sessions responsive on older or resource-constrained hardware.
+**Where Arrow does well**
+- **Lightest with one page open:** 234 MB, against 385–642 MB for the others.
+- **Quick, steady startup:** 2.9 s on every launch, close to the Chromium-based browsers and almost 3× faster than Firefox.
+- **Smallest by far:** a ~120 KB installer (see [Small by design](#-small-by-design)).
+
+**Where it falls behind**
+- **Responsiveness in heavy web apps:** last on Speedometer; Brave is about twice as fast. This comes mostly from the WebKitGTK engine Arrow is built on, so it improves as WebKitGTK does.
+- **Many tabs:** WebKitGTK gives every tab its own processes, so memory grows faster than in Brave or Chromium, which share a process between tabs from the same site. Unused tabs are put to sleep to keep this in check.
+- **Missing web features:** no DRM (Netflix, Spotify and similar sites won't play), no passkeys, no picture-in-picture, no AV1 video and no AVIF images. WebRTC (video calls) is off by default for privacy and can be turned on in Settings.
+
+<details>
+<summary><b>How it was measured</b></summary>
+
+- Every browser ran the same tests one at a time from a fresh, throwaway profile, with all test pages served from a local server, so network speed played no part.
+- Arrow ran with ad blocking and GPU acceleration on and WebRTC off; the other browsers used their default settings (so Brave's ad blocker was on).
+- Speedometer 3.1 is the official `release/3.1` suite, averaged over 10 iterations; the scores were repeated in a second run and agreed within 3%. Startup is the median of 5 launches. Memory is the PSS total of every process the browser started, measured after the pages settled.
+- This is a slow machine, so the absolute numbers are far below what a modern PC scores. The ranking between browsers is what carries over.
+</details>
 
 ---
 
