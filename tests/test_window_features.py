@@ -820,6 +820,21 @@ class WindowFeatureTests(unittest.TestCase):
         self.assertTrue(self.win.on_permission_request(wv, Unknown()))  # a prompt here would block the test
         self.assertEqual(calls, ["deny"])
 
+    # ---- update notice -------------------------------------------------
+    def test_update_notice_only_appears_after_a_check(self):
+        win = self.win
+        win.update_dialog_box.hide()
+        win.show_all()  # what starting the browser does: it used to reveal the notice, unchecked
+        self.assertFalse(win.update_dialog_box.get_visible(), "claimed 'latest version' without checking")
+        win.show_latest_version_notification()
+        self.assertTrue(win.update_dialog_box.get_visible())
+        self.assertTrue(win.update_dialog_label.get_visible())
+        self.assertIn("latest version", win.update_dialog_label.get_text())
+        self.assertFalse(win.btn_restart_update.get_visible())
+        win.show_update_notification_dialog("99.0.0", installed=True)
+        self.assertTrue(win.btn_restart_update.get_visible(), "restart button shown for a downloaded update")
+        win.update_dialog_box.hide()
+
     # ---- sandbox, fullscreen ----------------------------------------------
     def test_web_pages_run_in_the_sandbox(self):
         self.assertTrue(bb.webkit_sandbox_usable(), "bubblewrap can't start a sandbox on this machine")

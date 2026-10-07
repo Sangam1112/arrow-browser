@@ -2626,7 +2626,7 @@ class BharatBrowserWindow(Gtk.Window):
 
         icon_lbl = Gtk.Label(label="✔")
         icon_lbl.get_style_context().add_class("update-icon-text")
-        self.update_dialog_label = Gtk.Label(label=f"Bharat Browser is working on latest version (v{self.current_version})")
+        self.update_dialog_label = Gtk.Label(label="")  # set by whichever update result shows the box
         self.update_dialog_label.get_style_context().add_class("update-dialog-text")
 
         self.btn_restart_update = Gtk.Button(label="Restart Now")
@@ -2647,6 +2647,11 @@ class BharatBrowserWindow(Gtk.Window):
         self.update_dialog_box.pack_start(btn_close_update, False, False, 0)
 
         self.overlay.add_overlay(self.update_dialog_box)
+        # Shown only by an update check's result. Without no-show-all, the window's own show_all() at
+        # startup revealed it straight away, saying "working on latest version" before anything was checked.
+        for child in (icon_lbl, self.update_dialog_label, btn_close_update):
+            child.show()
+        self.update_dialog_box.set_no_show_all(True)
         self.update_dialog_box.hide()
 
         # Zoom Level Indicator Overlay — shown briefly on Ctrl+/Ctrl-/Ctrl+0
@@ -4914,7 +4919,7 @@ class BharatBrowserWindow(Gtk.Window):
 
     def show_latest_version_notification(self):
         self.update_dialog_label.set_text(f"Browser is working on latest version (v{self.current_version})")
-        self.update_dialog_box.show_all()
+        self.update_dialog_box.show()
         self.btn_restart_update.hide()
         self.push_notification_status(f"✅ Browser is working on latest version (v{self.current_version})")
         GLib.timeout_add_seconds(self.VERSION_NOTIFICATION_AUTOHIDE_SECONDS, lambda: (self.update_dialog_box.hide(), False)[1])
@@ -4922,12 +4927,12 @@ class BharatBrowserWindow(Gtk.Window):
     def show_update_notification_dialog(self, version_str, installed=True):
         if installed:
             self.update_dialog_label.set_text(f"Downloaded update v{version_str} — click Restart Now to apply")
-            self.update_dialog_box.show_all()
+            self.update_dialog_box.show()
             self.btn_restart_update.show()
             self.push_notification_status(f"🎉 Downloaded update v{version_str}. Restart to apply.")
         else:
             self.update_dialog_label.set_text(f"Update v{version_str} available — install via your package manager")
-            self.update_dialog_box.show_all()
+            self.update_dialog_box.show()
             self.btn_restart_update.hide()
             self.push_notification_status(f"⬆️ Update v{version_str} available (auto-install needs write access)")
             GLib.timeout_add_seconds(8, lambda: (self.update_dialog_box.hide(), False)[1])
