@@ -55,6 +55,8 @@ PAGES = {
     "/spa": ("<html><title>spa</title><body><script>window.go=n=>history.pushState({},'','/spa/watch?v='+n)"
              "</script></body></html>"),
     "/framed": "<html><title>framed</title><body><iframe src='/thin?utm_source=frame'></iframe></body></html>",
+    "/darksite": ("<html><head><title>darksite</title><style>.dk{background:#121212;color:#eee}</style></head>"
+                  "<body class='dk'>already dark</body></html>"),
     "/opener": "<html><title>opener</title><body><a id='p' target='_blank' href='/done?utm_source=mail&k=1'>open</a></body></html>",
 }
 
@@ -218,6 +220,25 @@ class WindowFeatureTests(unittest.TestCase):
         self.assertTrue(spin(lambda: not wv.is_loading() and (wv.get_uri() or "").endswith(path.split("?")[0])
                              and (wait_title is None or wv.get_title() == wait_title), 10), f"{path} did not load")
         return wv
+
+    # ---- dark mode -----------------------------------------------------
+    def test_dark_mode_darkens_light_pages_and_leaves_dark_ones_alone(self):
+        win = self.win
+        filtered = "getComputedStyle(document.documentElement).filter !== 'none'"
+        self.assertFalse(win.dark_mode_active)
+        try:
+            wv = self.load("/darksite", "darksite")
+            win.on_dark_clicked(win.btn_dark)  # switched on while a dark page is showing
+            self.assertTrue(spin(lambda: js(wv, filtered) == "false", 3), "already-dark page was inverted (turns white)")
+            self.load("/thin", "thin")
+            self.assertTrue(spin(lambda: js(wv, filtered) == "true", 3), "light page not darkened")
+            js(wv, "document.body.style.background = '#121212'")  # the site switches to its own dark theme
+            self.assertTrue(spin(lambda: js(wv, filtered) == "false", 3), "page that turned dark still inverted")
+            self.load("/darksite", "darksite")
+            self.assertTrue(spin(lambda: js(wv, filtered) == "false", 3), "newly loaded dark page was inverted")
+        finally:
+            if win.dark_mode_active:
+                win.on_dark_clicked(win.btn_dark)
 
     # ---- tabs ----------------------------------------------------------
     def test_switching_tabs_shows_that_tabs_address_and_title(self):

@@ -1945,18 +1945,78 @@ PREFETCH_USER_SCRIPT = """
 })();
 """
 
+DARK_NATIVE_ATTR = "data-bharat-native-dark"
+DARK_WORLD = "bharat-dark"
+
+# Pages that are already dark (their own dark theme, or prefers-color-scheme
+# from a dark desktop theme) are marked by DARK_DETECT_JS and left alone:
+# inverting them would turn them white.
 DARKREADER_CSS = """
-html {
-    filter: invert(90%) hue-rotate(180deg) !important;
+html:not([%(attr)s]) {
+    filter: invert(90%%) hue-rotate(180deg) !important;
     /* The invert filter applies to html's own background too, so this must
-       be the pre-inversion colour: white inverts (90%) to a dark #191919,
+       be the pre-inversion colour: white inverts (90%%) to a dark #191919,
        whereas #121212 would flip to light grey behind transparent pages. */
     background-color: #ffffff !important;
 }
-img, video, canvas, svg, [style*="background-image"] {
-    filter: invert(111%) hue-rotate(180deg) !important;
+html:not([%(attr)s]) :is(img, video, canvas, svg, [style*="background-image"]) {
+    filter: invert(111%%) hue-rotate(180deg) !important;
 }
-"""
+""" % {"attr": DARK_NATIVE_ATTR}
+
+# Decides whether the page is already dark. Runs in its own JS world so pages
+# can't overwrite the helper. It reads the page's own colours with the
+# attribute set, so our stylesheet isn't in the way, and then drops the
+# attribute again if the page is light. All of this happens in one task, so
+# nothing is painted in between. It checks again after load and when the
+# page switches theme by changing a class or style on <html>/<body>.
+DARK_DETECT_JS = """
+(function() {
+    if (window.__bharatDark) { window.__bharatDark(); return; }
+    var ATTR = '%s';
+    function rgba(s) {
+        var m = /rgba?\\(([^)]+)\\)/.exec(s || '');
+        if (!m) return null;
+        var p = m[1].split(/[ ,\\/]+/).filter(Boolean).map(parseFloat);
+        return { l: (0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]) / 255,
+                 a: p.length > 3 ? p[3] : 1 };
+    }
+    function isDark() {
+        var root = document.documentElement, body = document.body;
+        var els = body ? [body, root] : [root];
+        for (var i = 0; i < els.length; i++) {
+            var bg = rgba(getComputedStyle(els[i]).backgroundColor);
+            if (bg && bg.a > 0.5) return bg.l < 0.4;
+        }
+        // No background of its own: the page draws on the canvas, which is
+        // dark exactly when the page uses a dark colour-scheme, i.e. light text.
+        var fg = rgba(getComputedStyle(body || root).color);
+        return !!fg && fg.l > 0.6;
+    }
+    var check = window.__bharatDark = function() {
+        var root = document.documentElement;
+        if (!root) return;
+        root.setAttribute(ATTR, '');
+        if (!isDark()) root.removeAttribute(ATTR);
+    };
+    var watching = false;
+    function watch() {
+        check();
+        if (watching || !document.body) return;
+        watching = true;
+        var mo = new MutationObserver(check);
+        var opts = { attributes: true, attributeFilter:
+            ['class', 'style', 'data-theme', 'data-color-mode', 'theme', 'dark'] };
+        mo.observe(document.documentElement, opts);
+        mo.observe(document.body, opts);
+    }
+    if (document.readyState === 'loading')
+        document.addEventListener('DOMContentLoaded', watch);
+    else watch();
+    window.addEventListener('load', check);
+    setTimeout(check, 1500);
+})();
+""" % DARK_NATIVE_ATTR
 
 MEDIA_POLYFILL_JS = """
 (function() {
@@ -2606,6 +2666,9 @@ class BharatBrowserWindow(Gtk.Window):
             WebKit2.UserStyleLevel.USER,
             None, None
         )
+        self.dark_detect_script = WebKit2.UserScript.new_for_world(
+            DARK_DETECT_JS, WebKit2.UserContentInjectedFrames.TOP_FRAME,
+            WebKit2.UserScriptInjectionTime.START, DARK_WORLD, None, None)
         self.media_script = WebKit2.UserScript(
             MEDIA_POLYFILL_JS,
             WebKit2.UserContentInjectedFrames.ALL_FRAMES,
@@ -5373,12 +5436,17 @@ class BharatBrowserWindow(Gtk.Window):
             return
         if enabled:
             ucm.add_style_sheet(self.dark_stylesheet)
+            ucm.add_script(self.dark_detect_script)
         else:
             ucm.remove_style_sheet(self.dark_stylesheet)
+            ucm.remove_script(self.dark_detect_script)
         ucm._bharat_dark_applied = enabled
 
     def apply_dark_reader_to_webview(self, webview):
         self._set_dark_stylesheet(webview.get_user_content_manager(), True)
+        # The user script only runs on the next page load; check the page
+        # that's already showing now, or an already-dark page goes white.
+        webview.run_javascript_in_world(DARK_DETECT_JS, DARK_WORLD, None, None, None)
 
     def remove_dark_reader_from_webview(self, webview):
         self._set_dark_stylesheet(webview.get_user_content_manager(), False)
