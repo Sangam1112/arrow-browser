@@ -3,6 +3,28 @@
 All notable changes to Bharat Browser. Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.5.17] - 2026-10-07
+
+A security release, from a review of the browser against the standards other browsers follow.
+
+### Security
+- **Websites now run in a sandbox.** Each page used to run with your full rights, so a bug in the web engine that a malicious site could exploit would reach all your files (documents, SSH keys, saved cookies). Pages now run inside a bubblewrap sandbox, as in GNOME Web, Chrome and Firefox, and such an attack ends there. If the sandbox can't start on a computer, the browser works as before. `BHARAT_NO_SANDBOX=1` switches it off.
+- **"Fill" can no longer put a password into the wrong site.** The fill offer stayed up for a minute and filled whatever page the tab showed by then, so a page that moved on to another site could receive the first site's password. The offer now closes when the tab goes to another page. Fill also checks the site again, and it runs where the page can't watch or tamper with it.
+- **Permission prompts say what the site is asking for.** Instead of "Allow a permission?", they say "use your camera", "see and share your screen", "read what you copied to the clipboard", and so on. Requests nobody can judge from a prompt are refused without asking. Only the tab you're looking at can hide the mouse pointer, and Esc always brings it back.
+- **Fullscreen names the site.** A page in fullscreen can draw a fake address bar. You now see "*site* is now full screen · Press Esc to exit" for a few seconds, as in other browsers.
+- **Program files ask before saving.** Websites can save downloads without asking. For files that can run programs or install software (`.desktop`, `.sh`, `.AppImage`, `.deb`, `.exe`, …), you're now asked first. Downloads can no longer be saved as hidden files.
+- **Old browsing data is really removed.** The old Chromium-based version left its cookies and site data in your profile folder, where "Clear history on exit" never reached them. The cleanup meant to remove them only removed folders and missed most names. It now removes all of it.
+- **Safer install scripts.** The install and build scripts wrote files under fixed names in `/tmp`, where another user on the same computer could swap them before a system-wide install copied them as root. They now use private temporary folders. The `bharat-browser` launcher no longer falls back to running code from whatever folder you're in.
+- **Less to fingerprint.** Websites could read a few markers this browser left on pages, including the made-up WebGL graphics name, and tell that you use Bharat Browser. They're gone. Private windows no longer look up or connect to links you only hover over.
+- **Updates must carry a normal version number** (`1.2.3`) before anything is downloaded.
+
+### Removed
+- **Reader mode.**
+- **The Advanced page in Settings.** Hardware acceleration and developer tools keep whatever you had set. Developer tools can still be turned on with `"dev_tools_enabled": true` in `~/.config/bharat-browser/settings.json`.
+
+### Fixed
+- Pages opened in a new window by a link ran the browser's page scripts twice.
+
 ## [1.5.16] - 2026-10-07
 
 ### Fixed
