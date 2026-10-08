@@ -56,7 +56,8 @@ It is a native GTK3 desktop app, not a repackaged Chromium or Electron. The ad b
 - **Pinned tabs** that survive restarts, plus a one-key way to reopen a closed tab.
 - **Tab Memory** (main menu): see which tab is using the most memory, then suspend or close it from the list.
 - **Switch in a minute**: import bookmarks and history from Firefox, Chrome, Brave, Edge, Vivaldi, Opera and more.
-- **Dark mode for websites** that darkens bright pages and leaves sites that are already dark alone.
+- **Dark mode for websites** (Settings → General) that darkens bright pages and leaves sites that are already dark alone.
+- **Digital Wellbeing** (Settings → Digital Wellbeing, off until you turn it on): screen time per site, daily limits that close a site once its time is used up, break reminders, and a bedtime wind-down that turns pages greyscale. It all stays on your computer.
 - **A friendly offline page** that reloads itself when you're back online, with a kite game while you wait 🪁.
 
 **🪶 Light on your computer**

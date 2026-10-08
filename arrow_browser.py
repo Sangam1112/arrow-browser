@@ -811,7 +811,10 @@ def build_notice_page(icon, heading, body_html, actions_html, tech=""):
     """Same look as the error page, for other notices (crashes, HTTP warnings).
     `body_html` and `actions_html` are inserted as-is, so callers must escape any
     page-controlled text in them."""
-    return _fill_error_template(_ERROR_PAGE_TEMPLATE, {
+    template = _ERROR_PAGE_TEMPLATE
+    if not tech:
+        template = template.replace('<div class="tech">Technical details: @TECH@</div>', "")
+    return _fill_error_template(template, {
         "ICON": icon, "PULSE": "", "HEADING": heading, "BODY": body_html, "ACTIONS": actions_html,
         "LIVE": "", "GAME": "", "SCRIPT": "", "URI": "", "TECH": GLib.markup_escape_text(tech)})
 
@@ -1529,6 +1532,209 @@ def save_privacy_stats(stats):
 
 
 # ---------------------------------------------------------------------------
+# Digital Wellbeing: screen time, daily site limits, break reminders, bedtime
+# ---------------------------------------------------------------------------
+# Everything stays in wellbeing.json on this computer. Private windows never
+# add to it, but the limits still apply in them.
+WELLBEING_FILE = os.path.join(CONFIG_DIR, "wellbeing.json")
+WELLBEING_KEEP_DAYS = 14
+WELLBEING_EXTRA_SECONDS = 5 * 60        # the "5 more minutes" button on the time's-up page
+WELLBEING_BREAK_RESET_SECONDS = 5 * 60  # a pause this long counts as having had a break
+DEFAULT_BEDTIME_START = "23:00"
+DEFAULT_BEDTIME_END = "07:00"
+# bbc.co.uk, not co.uk: the label before a two-letter country code is often part of the suffix.
+_SECOND_LEVEL_LABELS = {"co", "com", "org", "net", "gov", "ac", "edu", "gob", "nic", "ne", "or"}
+
+
+def wellbeing_site(uri):
+    """The site a page's time counts towards: youtube.com for https://m.youtube.com/watch?v=…,
+    bbc.co.uk for www.bbc.co.uk. "" for anything that isn't a web page."""
+    if not (uri or "").startswith(("http://", "https://")):
+        return ""
+    host = site_host_of(uri).rstrip(".")
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+        return host
+    except ValueError:
+        pass
+    labels = host.split(".")
+    if len(labels) <= 2:
+        return host
+    keep = 3 if len(labels[-1]) == 2 and labels[-2] in _SECOND_LEVEL_LABELS else 2
+    return ".".join(labels[-keep:])
+
+
+def wellbeing_site_from_input(text):
+    """What someone typed in the "add a limit" box ("YouTube.com", "https://www.reddit.com/r/x")
+    as a site, or "" if it doesn't look like one."""
+    text = (text or "").strip().lower()
+    if not text:
+        return ""
+    if "://" not in text:
+        text = "https://" + text
+    site = wellbeing_site(text)
+    return site if ("." in site or site == "localhost") else ""
+
+
+def parse_clock(text, default):
+    """"23:30" -> minutes after midnight (1410); `default` (also "HH:MM") if it isn't a time."""
+    for value in (text, default):
+        try:
+            h, m = (int(part) for part in str(value).split(":"))
+            if 0 <= h < 24 and 0 <= m < 60:
+                return h * 60 + m
+        except ValueError:
+            continue
+    return 0
+
+
+def in_bedtime(minute_of_day, start, end):
+    """Whether `minute_of_day` falls in bedtime, which may run past midnight (23:00-07:00)."""
+    if start == end:
+        return False
+    if start < end:
+        return start <= minute_of_day < end
+    return minute_of_day >= start or minute_of_day < end
+
+
+def bedtime_night(wall, start, end):
+    """The date a bedtime belongs to, so "not tonight" at 01:00 covers the night that began at 23:00."""
+    local = time.localtime(wall)
+    minute = local.tm_hour * 60 + local.tm_min
+    if start > end and minute < end:
+        local = time.localtime(wall - 86400)
+    return time.strftime("%Y-%m-%d", local)
+
+
+class WellbeingTracker:
+    """Seconds per site per day, daily limits (minutes) and extra time granted today.
+    One instance is shared by every window (wellbeing_tracker())."""
+
+    def __init__(self, path=WELLBEING_FILE):
+        self.path = path
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+
+        def seconds_by_day(raw):
+            out = {}
+            for day, sites in (raw if isinstance(raw, dict) else {}).items():
+                if isinstance(sites, dict):
+                    out[day] = {s: float(v) for s, v in sites.items()
+                                if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0}
+            return out
+
+        self.days = seconds_by_day(data.get("days"))
+        self.extra = seconds_by_day(data.get("extra"))
+        raw_limits = data.get("limits") if isinstance(data.get("limits"), dict) else {}
+        self.limits = {s: int(m) for s, m in raw_limits.items()
+                       if isinstance(m, int) and not isinstance(m, bool) and m > 0}
+        self.dirty = False
+        self.saved_at = time.time()
+        self.tokens = {}            # one-time "5 more minutes" tokens -> (site, address to return to)
+        self.next_break = None      # time.monotonic() when the next break reminder is due
+        self.last_active = None
+        self.bedtime_snoozed = ""   # bedtime_night() the person said "not tonight" for
+        self.bedtime_greeted = ""   # bedtime_night() the bedtime reminder was already shown for
+
+    @staticmethod
+    def day(wall=None):
+        return time.strftime("%Y-%m-%d", time.localtime(time.time() if wall is None else wall))
+
+    def add(self, site, seconds, wall=None):
+        today = self.day(wall)
+        sites = self.days.setdefault(today, {})
+        sites[site] = sites.get(site, 0.0) + seconds
+        if len(self.days) > WELLBEING_KEEP_DAYS:
+            for old in sorted(self.days)[:-WELLBEING_KEEP_DAYS]:
+                del self.days[old]
+        for old in [d for d in self.extra if d != today]:
+            del self.extra[old]
+        self.dirty = True
+
+    def used(self, site, wall=None):
+        return self.days.get(self.day(wall), {}).get(site, 0.0)
+
+    def allowed(self, site, wall=None):
+        """Seconds `site` may be used today, or None if it has no limit."""
+        if site not in self.limits:
+            return None
+        return self.limits[site] * 60 + self.extra.get(self.day(wall), {}).get(site, 0.0)
+
+    def over_limit(self, site, wall=None):
+        allowed = self.allowed(site, wall)
+        return allowed is not None and self.used(site, wall) >= allowed
+
+    def grant_extra(self, site, seconds, wall=None):
+        today = self.extra.setdefault(self.day(wall), {})
+        today[site] = today.get(site, 0.0) + seconds
+        self.save()
+
+    def set_limit(self, site, minutes):
+        self.limits[site] = int(minutes)
+        self.save()
+
+    def remove_limit(self, site):
+        self.limits.pop(site, None)
+        self.save()
+
+    def totals(self, days=1, wall=None):
+        """[(site, seconds)] over the last `days` days (today included), most-used first."""
+        wall = time.time() if wall is None else wall
+        summed = {}
+        for back in range(days):
+            for site, secs in self.days.get(self.day(wall - back * 86400), {}).items():
+                summed[site] = summed.get(site, 0.0) + secs
+        return sorted(summed.items(), key=lambda item: item[1], reverse=True)
+
+    def clear(self):
+        self.days, self.extra = {}, {}
+        self.save()
+
+    def mint_token(self, site, uri):
+        token = secrets_module.token_urlsafe(12)
+        self.tokens[token] = (site, uri)
+        if len(self.tokens) > 50:
+            self.tokens.pop(next(iter(self.tokens)))
+        return token
+
+    def break_due(self, now, interval):
+        """Call while someone is browsing. True once they have gone `interval` seconds without a
+        5-minute pause; the next reminder is then `interval` later."""
+        if self.last_active is None or now - self.last_active > WELLBEING_BREAK_RESET_SECONDS:
+            self.next_break = now + interval
+        self.last_active = now
+        if now >= self.next_break:
+            self.next_break = now + interval
+            return True
+        return False
+
+    def save(self):
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            _write_json_private(self.path, {"days": self.days, "extra": self.extra, "limits": self.limits},
+                                indent=None)
+        except Exception as e:
+            print("Wellbeing save note:", e)
+        self.dirty = False
+        self.saved_at = time.time()
+
+
+_WELLBEING_TRACKER = None
+
+
+def wellbeing_tracker():
+    global _WELLBEING_TRACKER
+    if _WELLBEING_TRACKER is None:
+        _WELLBEING_TRACKER = WellbeingTracker()
+    return _WELLBEING_TRACKER
+
+
+# ---------------------------------------------------------------------------
 # Password storage: freedesktop Secret Service (GNOME Keyring, KWallet, KeePassXC)
 # ---------------------------------------------------------------------------
 class SecretServiceClient:
@@ -1964,6 +2170,17 @@ html:not([%(attr)s]) :is(img, video, canvas, svg, [style*="background-image"]) {
 }
 """ % {"attr": DARK_NATIVE_ATTR}
 
+# Bedtime wind-down turns pages grey. The filter has to sit on <html> too (a filter on
+# <body> would make position:fixed headers scroll away), so with dark mode on, the
+# second sheet repeats dark mode's filter with grayscale added, using a more
+# specific selector so it wins over DARKREADER_CSS whatever order they were added in.
+BEDTIME_CSS = "html { filter: grayscale(100%) !important; }\n"
+BEDTIME_DARK_CSS = BEDTIME_CSS + """
+html:not([%(attr)s]):not([data-arrow-bedtime-off]) {
+    filter: invert(90%%) hue-rotate(180deg) grayscale(100%%) !important;
+}
+""" % {"attr": DARK_NATIVE_ATTR}
+
 # Decides whether the page is already dark. Runs in its own JS world so pages
 # can't overwrite the helper. It reads the page's own colours with the
 # attribute set, so our stylesheet isn't in the way, and then drops the
@@ -2392,6 +2609,13 @@ class ArrowBrowserWindow(Gtk.Window):
         self.spellcheck_enabled = saved_settings.get("spellcheck_enabled", True)
         self.tracker_lists_enabled = saved_settings.get("tracker_lists_enabled", True)
         self.passwords_enabled = saved_settings.get("passwords_enabled", True)
+        self.wellbeing_enabled = saved_settings.get("wellbeing_enabled", False)
+        self.break_reminders_enabled = saved_settings.get("break_reminders_enabled", True)
+        self.break_interval_minutes = self._clamp_int(saved_settings.get("break_interval_minutes"), 45, 10, 180)
+        self.bedtime_enabled = saved_settings.get("bedtime_enabled", False)
+        self.bedtime_start = saved_settings.get("bedtime_start", DEFAULT_BEDTIME_START)
+        self.bedtime_end = saved_settings.get("bedtime_end", DEFAULT_BEDTIME_END)
+        self._bedtime_active = False
         # Per-site choices (permissions, zoom, ad blocking, JS) and privacy stats are
         # only persisted for normal windows; private windows keep them in memory.
         self.site_settings = {} if private else load_site_settings()
@@ -2622,12 +2846,6 @@ class ArrowBrowserWindow(Gtk.Window):
         self.btn_screenshot.connect("clicked", self.on_screenshot_clicked)
         action_group.pack_start(self.btn_screenshot, False, False, 0)
 
-        self.btn_dark = Gtk.Button.new_from_icon_name("weather-clear-night-symbolic", Gtk.IconSize.BUTTON)
-        self.btn_dark.get_style_context().add_class("flat-icon-btn")
-        self.btn_dark.set_tooltip_text("Toggle DarkReader Engine")
-        self.btn_dark.connect("clicked", self.on_dark_clicked)
-        action_group.pack_start(self.btn_dark, False, False, 0)
-
         self.btn_bookmarks = Gtk.Button.new_from_icon_name("user-bookmarks-symbolic", Gtk.IconSize.BUTTON)
         self.btn_bookmarks.get_style_context().add_class("flat-icon-btn")
         self.btn_bookmarks.set_tooltip_text("Bookmark Manager (Ctrl+Shift+O)")
@@ -2673,6 +2891,10 @@ class ArrowBrowserWindow(Gtk.Window):
             WebKit2.UserStyleLevel.USER,
             None, None
         )
+        self.bedtime_stylesheet, self.bedtime_dark_stylesheet = (
+            WebKit2.UserStyleSheet(css, WebKit2.UserContentInjectedFrames.TOP_FRAME,
+                                   WebKit2.UserStyleLevel.USER, None, None)
+            for css in (BEDTIME_CSS, BEDTIME_DARK_CSS))
         self.dark_detect_script = WebKit2.UserScript.new_for_world(
             DARK_DETECT_JS, WebKit2.UserContentInjectedFrames.TOP_FRAME,
             WebKit2.UserScriptInjectionTime.START, DARK_WORLD, None, None)
@@ -2891,6 +3113,9 @@ class ArrowBrowserWindow(Gtk.Window):
         # When the computer runs low on memory, put background tabs to sleep
         # right away (least recently used first) instead of waiting 15 minutes.
         GLib.timeout_add_seconds(self.MEMORY_PRESSURE_CHECK_INTERVAL_SECONDS, self._check_memory_pressure)
+        # Digital Wellbeing: screen time, site limits, break reminders, bedtime.
+        self._wellbeing_stopped = False
+        GLib.timeout_add_seconds(self.WELLBEING_TICK_SECONDS, self._wellbeing_tick)
 
         # GLib's own low-memory signal as well: it only fires where the
         # low-memory-monitor service is installed (Fedora has it; Ubuntu and
@@ -3304,6 +3529,17 @@ class ArrowBrowserWindow(Gtk.Window):
             color: #94a3b8;
             font-size: 11px;
         }
+        .arrow-dialog levelbar trough {
+            background-color: rgba(255, 255, 255, 0.08);
+            border: none;
+            border-radius: 999px;
+            min-height: 8px;
+        }
+        .arrow-dialog levelbar block.filled {
+            background-color: #6366f1;
+            border: none;
+            border-radius: 999px;
+        }
         .arrow-dialog entry {
             background-color: rgba(255, 255, 255, 0.06);
             color: #f1f5f9;
@@ -3520,6 +3756,7 @@ class ArrowBrowserWindow(Gtk.Window):
                 ucm.add_script(self.typed_text_script)
         if self.dark_mode_active:
             self._set_dark_stylesheet(ucm, True)
+        self._apply_bedtime_style(ucm)
 
         # Signals
         sig_ids = []
@@ -3824,6 +4061,9 @@ class ArrowBrowserWindow(Gtk.Window):
 
     def _release_window(self):
         global _LIVE_WINDOW_COUNT
+        self._wellbeing_stopped = True
+        if wellbeing_tracker().dirty:
+            wellbeing_tracker().save()
         _LIVE_WINDOW_COUNT -= 1
         if _LIVE_WINDOW_COUNT <= 0:
             Gtk.main_quit()
@@ -5414,6 +5654,8 @@ class ArrowBrowserWindow(Gtk.Window):
             webview._arrow_mixed_content = False
         elif load_event == WebKit2.LoadEvent.COMMITTED:
             webview._arrow_committed = True
+            if self.wellbeing_enabled and wellbeing_tracker().limits:
+                GLib.idle_add(lambda: (self._enforce_site_limit(webview), False)[1])
             self._apply_saved_zoom(webview)
             if webview is self.get_active_webview():
                 self.update_security_icon(webview.get_uri() or "", webview)
@@ -5478,11 +5720,20 @@ class ArrowBrowserWindow(Gtk.Window):
             "download_dir": self.download_dir,
             "spellcheck_enabled": self.spellcheck_enabled,
             "tracker_lists_enabled": self.tracker_lists_enabled,
-            "passwords_enabled": self.passwords_enabled
+            "passwords_enabled": self.passwords_enabled,
+            "wellbeing_enabled": self.wellbeing_enabled,
+            "break_reminders_enabled": self.break_reminders_enabled,
+            "break_interval_minutes": self.break_interval_minutes,
+            "bedtime_enabled": self.bedtime_enabled,
+            "bedtime_start": self.bedtime_start,
+            "bedtime_end": self.bedtime_end,
         })
 
-    def on_dark_clicked(self, btn):
-        self.dark_mode_active = not self.dark_mode_active
+    def set_dark_mode(self, active):
+        """Turn dark mode for websites on or off (Settings → General)."""
+        if active == self.dark_mode_active:
+            return
+        self.dark_mode_active = active
         self.save_settings()
         for i in range(self.notebook.get_n_pages()):
             tb = self.notebook.get_nth_page(i)
@@ -5492,6 +5743,7 @@ class ArrowBrowserWindow(Gtk.Window):
                     self.apply_dark_reader_to_webview(wv)
                 else:
                     self.remove_dark_reader_from_webview(wv)
+                self._apply_bedtime_style(wv.get_user_content_manager())
         if self.dark_mode_active:
             self.statusbar.push(self.context_id, "DarkReader Engine Enabled 🌙")
         else:
@@ -5519,6 +5771,295 @@ class ArrowBrowserWindow(Gtk.Window):
 
     def remove_dark_reader_from_webview(self, webview):
         self._set_dark_stylesheet(webview.get_user_content_manager(), False)
+
+    # ------------------------------------------------------------------
+    # Digital Wellbeing (Settings → Digital Wellbeing)
+    # ------------------------------------------------------------------
+    WELLBEING_TICK_SECONDS = 5
+    BREAK_SNOOZE_SECONDS = 10 * 60
+
+    @staticmethod
+    def _clamp_int(value, default, low, high):
+        try:
+            return max(low, min(high, int(value)))
+        except (TypeError, ValueError):
+            return default
+
+    def _wellbeing_tick(self):
+        if self._wellbeing_stopped:
+            return False
+        self._wellbeing_step(time.time(), time.monotonic(), self.is_active())
+        return True
+
+    def _wellbeing_step(self, wall, now, focused):
+        """Every few seconds: count the time on the site in front, close sites whose daily
+        limit is used up, remind about breaks and switch bedtime greyscale on or off.
+        Time only counts while this window is the one in front."""
+        if not self.wellbeing_enabled:
+            self._update_bedtime(wall)
+            return
+        tracker = wellbeing_tracker()
+        webview = self.get_active_webview()
+        site = wellbeing_site(webview.get_uri()) if webview else ""
+        if focused and site:
+            if not self.is_private:
+                tracker.add(site, self.WELLBEING_TICK_SECONDS, wall)
+            if self.break_reminders_enabled and tracker.break_due(now, self.break_interval_minutes * 60):
+                if self._infobar is None:
+                    self._show_break_reminder()
+                else:  # don't push away a password or permission question; ask again in a minute
+                    tracker.next_break = now + 60
+        if tracker.limits:
+            for tab_box in self._tab_boxes():
+                self._enforce_site_limit(tab_box._arrow_webview, wall)
+        self._update_bedtime(wall)
+        if tracker.dirty and wall - tracker.saved_at >= 60:
+            tracker.save()
+
+    def _enforce_site_limit(self, webview, wall=None):
+        """Replace the page with the time's-up page if its site has used up today's limit."""
+        if not self.wellbeing_enabled or webview is None:
+            return False
+        uri = webview.get_uri() or ""
+        site = wellbeing_site(uri)
+        tracker = wellbeing_tracker()
+        if not site or not tracker.over_limit(site, wall):
+            return False
+        token = tracker.mint_token(site, uri)
+        webview.load_uri(f"arrow://times-up?t={token}")
+        if webview is self.get_active_webview():
+            self.statusbar.push(self.context_id, f"⏳ Today's time on {site} is used up")
+        return True
+
+    @staticmethod
+    def _format_minutes(seconds):
+        """Screen time to the minute: "1h 12m", "41m", "0m"."""
+        h, m = divmod(int(seconds) // 60, 60)
+        return f"{h}h {m}m" if h else f"{m}m"
+
+    def _times_up_page(self, token):
+        tracker = wellbeing_tracker()
+        site, uri = tracker.tokens.get(token, ("", ""))
+        if not site:
+            return None
+        esc = html_module.escape
+        allowed = tracker.allowed(site) or 0
+        body = (f"<p>You've spent <b>{esc(self._format_minutes(allowed))}</b> on <b>{esc(site)}</b> today, "
+                "which is the daily limit you set. It starts again at midnight.</p>"
+                "<p>You can change or remove this limit in Settings → Digital Wellbeing.</p>")
+        actions = f'<a class="btn alt" href="arrow://wellbeing-more?t={esc(token, quote=True)}">5 more minutes</a>'
+        page = build_notice_page("⏳", f"Time's up for {esc(site)}", body, actions)
+        return page.replace("<head>", f"<head><title>Time's up · {esc(site)}</title>", 1)
+
+    def _show_break_reminder(self):
+        minutes = self.break_interval_minutes
+        self._show_infobar(
+            f"⏸ You've been browsing for {minutes} minutes. Time for a short break: look at something "
+            "about 6 metres (20 feet) away for 20 seconds, stretch, or get some water.",
+            [("Snooze 10 min", lambda: setattr(wellbeing_tracker(), "next_break",
+                                               time.monotonic() + self.BREAK_SNOOZE_SECONDS)),
+             ("OK", lambda: None)],
+            timeout=120)
+
+    def _update_bedtime(self, wall):
+        tracker = wellbeing_tracker()
+        start = parse_clock(self.bedtime_start, DEFAULT_BEDTIME_START)
+        end = parse_clock(self.bedtime_end, DEFAULT_BEDTIME_END)
+        local = time.localtime(wall)
+        night = bedtime_night(wall, start, end)
+        want = (self.wellbeing_enabled and self.bedtime_enabled
+                and in_bedtime(local.tm_hour * 60 + local.tm_min, start, end)
+                and tracker.bedtime_snoozed != night)
+        if want == self._bedtime_active:
+            return
+        self._bedtime_active = want
+        for tab_box in self._tab_boxes():
+            self._apply_bedtime_style(tab_box._arrow_webview.get_user_content_manager())
+        if want and tracker.bedtime_greeted != night:
+            tracker.bedtime_greeted = night  # once a night, not once per window
+
+            def not_tonight():
+                tracker.bedtime_snoozed = night
+                self._update_bedtime(time.time())
+            self._show_infobar(
+                f"🌙 It's past {self.bedtime_start}, your bedtime. Pages are in greyscale to help you wind down.",
+                [("Not tonight", not_tonight), ("OK", lambda: None)], timeout=120)
+
+    def _apply_bedtime_style(self, ucm):
+        """Put the right greyscale sheet on `ucm` (none, plain, or the dark-mode one)."""
+        want = None
+        if self._bedtime_active:
+            want = self.bedtime_dark_stylesheet if self.dark_mode_active else self.bedtime_stylesheet
+        have = getattr(ucm, "_arrow_bedtime_sheet", None)
+        if have is want:
+            return
+        if have is not None:
+            ucm.remove_style_sheet(have)
+        if want is not None:
+            ucm.add_style_sheet(want)
+        ucm._arrow_bedtime_sheet = want
+
+    def on_wellbeing_toggled(self, active):
+        self.wellbeing_enabled = active
+        self.save_settings()
+        self._update_bedtime(time.time())
+
+    def on_bedtime_toggled(self, active):
+        self.bedtime_enabled = active
+        self.save_settings()
+        self._update_bedtime(time.time())
+
+    WELLBEING_TOP_SITES = 6
+    BEDTIME_START_CHOICES = [f"{h:02d}:{m:02d}" for h in (20, 21, 22, 23, 0, 1) for m in (0, 30)] + ["02:00"]
+    BEDTIME_END_CHOICES = [f"{h:02d}:{m:02d}" for h in range(5, 10) for m in (0, 30)] + ["10:00"]
+
+    def _build_wellbeing_page(self, page, switch, store, controls):
+        """Settings → Digital Wellbeing. The cards under the master switch are greyed out while it's off."""
+        tracker = wellbeing_tracker()
+        fmt = self._format_minutes
+        cards = []
+
+        def set_cards_sensitive(active):
+            for card in cards:
+                card.set_sensitive(active)
+
+        self._settings_section(page, "DIGITAL WELLBEING", switch(
+            "wellbeing_enabled", "🌱", "Digital Wellbeing",
+            "Counts the time you spend on each website while Arrow is the window in front, and turns on the "
+            "limits and reminders below. Turning it off stops counting; nothing is deleted.",
+            lambda act: (self.on_wellbeing_toggled(act), set_cards_sensitive(act))))
+
+        # --- Screen time -----------------------------------------------------
+        usage_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+
+        def refresh_usage():
+            for child in usage_box.get_children():
+                child.destroy()
+            today, week = tracker.totals(1), dict(tracker.totals(7))
+            note = ("This is a private window: its time isn't counted, but limits still apply."
+                    if self.is_private else "Counted only while a page is in front of you.")
+            usage_box.pack_start(self._settings_row(
+                "📊", f"Today: {fmt(sum(s for _, s in today))}",
+                f"Last 7 days: {fmt(sum(week.values()))}. {note}"), False, False, 0)
+            top = today[0][1] if today else 1
+            for site, secs in today[:self.WELLBEING_TOP_SITES]:
+                bar = Gtk.LevelBar.new_for_interval(0, 1)
+                bar.set_value(secs / top)
+                bar.set_size_request(160, -1)
+                usage_box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 0)
+                usage_box.pack_start(self._settings_row(
+                    None, site, f"{fmt(secs)} today · {fmt(week.get(site, secs))} in the last 7 days", bar),
+                    False, False, 0)
+            usage_box.show_all()
+
+        def clear_usage():
+            tracker.clear()
+            refresh_usage()
+            refresh_limits()
+
+        refresh_usage()
+        cards.append(self._settings_section(
+            page, "SCREEN TIME", usage_box,
+            self._settings_button_row("🧹", "Clear screen time", "Deletes the time counted so far. Your limits are kept.",
+                                      "Clear", clear_usage, style="settings-danger-btn")))
+
+        # --- Daily site limits -------------------------------------------------
+        limits_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+
+        def refresh_limits():
+            for child in limits_box.get_children():
+                child.destroy()
+            if not tracker.limits:
+                limits_box.pack_start(self._settings_row(
+                    "⏳", "No limits yet",
+                    "When a site's time for the day is used up, its tabs show a “Time's up” page instead, "
+                    "with a button for 5 more minutes. Limits start again at midnight."), False, False, 0)
+            for i, site in enumerate(sorted(tracker.limits)):
+                if i:
+                    limits_box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 0)
+                spin = Gtk.SpinButton.new_with_range(5, 600, 5)
+                spin.set_value(tracker.limits[site])
+                spin.connect("value-changed", lambda sp, site=site: tracker.set_limit(site, sp.get_value_as_int()))
+                remove = Gtk.Button(label="Remove")
+                remove.get_style_context().add_class("settings-action-btn")
+                remove.connect("clicked", lambda _b, site=site: (tracker.remove_limit(site), refresh_limits()))
+                limits_box.pack_start(self._settings_row(
+                    "⏳", site, f"Used today: {fmt(tracker.used(site))}. Minutes allowed per day:", spin, remove),
+                    False, False, 0)
+            limits_box.show_all()
+
+        site_entry = Gtk.Entry()
+        site_entry.set_placeholder_text("youtube.com")
+        site_entry.set_width_chars(16)
+        minutes_spin = Gtk.SpinButton.new_with_range(5, 600, 5)
+        minutes_spin.set_value(30)
+        add_button = Gtk.Button(label="Add limit")
+        add_button.get_style_context().add_class("settings-primary-btn")
+        add_hint = "Type a website and how many minutes a day it may be used."
+        add_row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        add_text = self._settings_row("➕", "Add a daily limit", add_hint)
+        add_row._arrow_subtitle = add_text._arrow_subtitle
+        add_controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        add_controls.get_style_context().add_class("settings-row-extra")
+        site_entry.set_hexpand(True)
+        add_controls.pack_start(site_entry, True, True, 0)
+        add_controls.pack_start(minutes_spin, False, False, 0)
+        add_controls.pack_start(Gtk.Label(label="min a day"), False, False, 0)
+        add_controls.pack_start(add_button, False, False, 0)
+        add_row.pack_start(add_text, False, False, 0)
+        add_row.pack_start(add_controls, False, False, 0)
+
+        def add_limit(*_args):
+            site = wellbeing_site_from_input(site_entry.get_text())
+            if not site:
+                add_row._arrow_subtitle.set_text("That doesn't look like a website. Try something like youtube.com.")
+                return
+            tracker.set_limit(site, minutes_spin.get_value_as_int())
+            site_entry.set_text("")
+            add_row._arrow_subtitle.set_text(add_hint)
+            refresh_limits()
+
+        add_button.connect("clicked", add_limit)
+        site_entry.connect("activate", add_limit)
+        controls.update(wellbeing_limit_site=site_entry, wellbeing_limit_minutes=minutes_spin,
+                        wellbeing_limit_add=add_button, wellbeing_limits_box=limits_box)
+        refresh_limits()
+        cards.append(self._settings_section(page, "DAILY SITE LIMITS", limits_box, add_row))
+
+        # --- Breaks --------------------------------------------------------------
+        interval = Gtk.SpinButton.new_with_range(10, 180, 5)
+        interval.set_value(self.break_interval_minutes)
+        interval.connect("value-changed", lambda sp: (setattr(self, "break_interval_minutes", sp.get_value_as_int()),
+                                                      self.save_settings()))
+        cards.append(self._settings_section(
+            page, "BREAKS",
+            switch("break_reminders_enabled", "⏸", "Break reminders",
+                   "A gentle reminder to rest your eyes after browsing for a while. "
+                   "Stepping away for 5 minutes starts the count again.",
+                   store("break_reminders_enabled")),
+            self._settings_row("⏱️", "Remind me after", "Minutes of browsing without a break.", interval)))
+
+        # --- Bedtime -------------------------------------------------------------
+        def time_combo(choices, key):
+            combo = Gtk.ComboBoxText()
+            current = getattr(self, key)
+            for choice in choices + ([current] if current not in choices else []):
+                combo.append(choice, choice)
+            combo.set_active_id(current)
+            combo.connect("changed", lambda cb: (setattr(self, key, cb.get_active_id()), self.save_settings(),
+                                                 self._update_bedtime(time.time())))
+            return combo
+
+        cards.append(self._settings_section(
+            page, "BEDTIME",
+            switch("bedtime_enabled", "🌙", "Bedtime wind-down",
+                   "At bedtime, pages turn greyscale so they're less tempting, and you get one reminder. "
+                   "You can turn it off for the night from that reminder.",
+                   self.on_bedtime_toggled),
+            self._settings_row("🕚", "Bedtime", "Greyscale ends by itself in the morning.",
+                               time_combo(self.BEDTIME_START_CHOICES, "bedtime_start"), Gtk.Label(label="to"),
+                               time_combo(self.BEDTIME_END_CHOICES, "bedtime_end"))))
+        set_cards_sensitive(self.wellbeing_enabled)
 
     def on_screenshot_clicked(self, btn):
         webview = self.get_active_webview()
@@ -5843,8 +6384,8 @@ class ArrowBrowserWindow(Gtk.Window):
         self._settings_section(
             gen, "APPEARANCE & READING",
             switch("dark_mode_active", "🌙", "Dark mode for websites",
-                   "Recolours bright pages dark. Same as the moon button on the toolbar.",
-                   lambda act: act != self.dark_mode_active and self.on_dark_clicked(self.btn_dark)),
+                   "Recolours bright pages dark and leaves sites that are already dark alone.",
+                   self.set_dark_mode),
             switch("spellcheck_enabled", "✍️", "Check spelling while typing",
                    "Underlines misspelled words in text boxes, using the dictionaries installed on your system.",
                    self.on_spellcheck_toggled),
@@ -5993,6 +6534,12 @@ class ArrowBrowserWindow(Gtk.Window):
             self._settings_button_row("📈", "Tab Memory", "See which tab is using the most memory, then suspend or close it.",
                                       "Open", lambda: close_then(self.open_tab_memory)),
         )
+
+        self._build_wellbeing_page(
+            add_page("wellbeing", "🌱  Digital Wellbeing", "Digital Wellbeing",
+                     "See where your time online goes and set limits that suit you. "
+                     "Everything here is kept on this computer only."),
+            switch, store, controls)
 
         # --- About ------------------------------------------------------------
         about = add_page("about", "ℹ️  About", "About",
@@ -6306,6 +6853,16 @@ td.c{{text-align:right;color:#cbd5e1;width:70px}}td.b{{width:30%}}td.b span{{dis
             host = site_host_of(target)
             if target.startswith("http://") and host:
                 self._http_allowed_hosts.add(host)
+                page = f"<html><head><meta http-equiv='refresh' content='0;url={html_module.escape(target, quote=True)}'></head></html>"
+        elif parsed.netloc == "times-up":
+            token = (urllib.parse.parse_qs(parsed.query).get("t") or [""])[0]
+            page = self._times_up_page(token) or page
+        elif parsed.netloc == "wellbeing-more":
+            # Same one-time token idea: a website can't hand itself extra time.
+            token = (urllib.parse.parse_qs(parsed.query).get("t") or [""])[0]
+            site, target = wellbeing_tracker().tokens.pop(token, ("", ""))
+            if site and target.startswith(("http://", "https://")):
+                wellbeing_tracker().grant_extra(site, WELLBEING_EXTRA_SECONDS)
                 page = f"<html><head><meta http-equiv='refresh' content='0;url={html_module.escape(target, quote=True)}'></head></html>"
         data = page.encode("utf-8")
         request.finish(Gio.MemoryInputStream.new_from_bytes(GLib.Bytes.new(data)), len(data), "text/html")

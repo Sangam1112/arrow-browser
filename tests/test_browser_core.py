@@ -779,5 +779,85 @@ class WebProcessCrashTests(unittest.TestCase):
         self.assertIn("ran out of memory", webview.load_html.call_args[0][0])
 
 
+
+class WellbeingTests(TmpDirCase):
+    def tracker(self):
+        return bb.WellbeingTracker(os.path.join(self.tmp, "wellbeing.json"))
+
+    def test_site_groups_subdomains_and_ignores_non_web_pages(self):
+        self.assertEqual(bb.wellbeing_site("https://m.youtube.com/watch?v=1"), "youtube.com")
+        self.assertEqual(bb.wellbeing_site("https://www.bbc.co.uk/news"), "bbc.co.uk")
+        self.assertEqual(bb.wellbeing_site("http://127.0.0.1:8080/x"), "127.0.0.1")
+        self.assertEqual(bb.wellbeing_site("http://localhost:3000/"), "localhost")
+        for uri in ("about:blank", "arrow://times-up?t=x", "file:///home/a.html", "", None):
+            self.assertEqual(bb.wellbeing_site(uri), "", uri)
+        self.assertEqual(bb.wellbeing_site_from_input(" https://www.YouTube.com/feed "), "youtube.com")
+        self.assertEqual(bb.wellbeing_site_from_input("reddit.com"), "reddit.com")
+        self.assertEqual(bb.wellbeing_site_from_input("not a site"), "")
+
+    def test_bedtime_runs_past_midnight(self):
+        start, end = bb.parse_clock("23:00", "0:0"), bb.parse_clock("07:00", "0:0")
+        self.assertEqual((start, end), (23 * 60, 7 * 60))
+        self.assertTrue(bb.in_bedtime(23 * 60 + 30, start, end))
+        self.assertTrue(bb.in_bedtime(3 * 60, start, end))
+        self.assertFalse(bb.in_bedtime(7 * 60, start, end))
+        self.assertFalse(bb.in_bedtime(12 * 60, start, end))
+        self.assertTrue(bb.in_bedtime(21 * 60, 20 * 60, 22 * 60))
+        self.assertFalse(bb.in_bedtime(5, 60, 60), "same start and end means no bedtime")
+        self.assertEqual(bb.parse_clock("25:99", "23:00"), 23 * 60, "bad times fall back to the default")
+        evening = time.mktime((2026, 10, 8, 23, 30, 0, 0, 0, -1))
+        night = time.mktime((2026, 10, 9, 1, 0, 0, 0, 0, -1))
+        self.assertEqual(bb.bedtime_night(evening, start, end), bb.bedtime_night(night, start, end),
+                         "1 am belongs to the night that began at 11 pm")
+
+    def test_limits_extra_time_and_saving(self):
+        t, now = self.tracker(), time.time()
+        t.set_limit("youtube.com", 1)
+        t.add("youtube.com", 55, now)
+        self.assertFalse(t.over_limit("youtube.com", now))
+        t.add("youtube.com", 5, now)
+        self.assertTrue(t.over_limit("youtube.com", now))
+        self.assertFalse(t.over_limit("github.com", now), "sites without a limit are never over")
+        t.grant_extra("youtube.com", bb.WELLBEING_EXTRA_SECONDS, now)
+        self.assertFalse(t.over_limit("youtube.com", now))
+        self.assertTrue(t.over_limit("youtube.com", now + 86400) is False and t.used("youtube.com", now + 86400) == 0,
+                        "a new day starts from zero")
+        t.add("github.com", 30, now)
+        t.save()
+        again = self.tracker()
+        self.assertEqual(again.limits, {"youtube.com": 1})
+        self.assertEqual(again.used("youtube.com", now), 60)
+        self.assertEqual(again.totals(1, now), [("youtube.com", 60), ("github.com", 30)])
+        again.clear()
+        self.assertEqual(self.tracker().totals(7, now), [])
+        self.assertEqual(self.tracker().limits, {"youtube.com": 1}, "clearing screen time keeps the limits")
+
+    def test_old_days_are_dropped(self):
+        t, now = self.tracker(), time.time()
+        for back in range(20):
+            t.add("a.com", 10, now - back * 86400)
+        self.assertEqual(len(t.days), bb.WELLBEING_KEEP_DAYS)
+        self.assertEqual(t.totals(7, now), [("a.com", 70)])
+
+    def test_damaged_file_is_ignored(self):
+        path = os.path.join(self.tmp, "wellbeing.json")
+        write_text(path, "{not json")
+        self.assertEqual(self.tracker().limits, {})
+        write_json(path, {"days": {"2026-10-08": {"a.com": "x", "b.com": 5}}, "limits": {"a.com": True, "b.com": 20}})
+        t = self.tracker()
+        self.assertEqual(t.days, {"2026-10-08": {"b.com": 5.0}})
+        self.assertEqual(t.limits, {"b.com": 20})
+
+    def test_break_reminder_after_continuous_browsing(self):
+        t = self.tracker()
+
+        def browse(start, stop):  # one call every 5 seconds, like the window's tick
+            return [now for now in range(start, stop, 5) if t.break_due(now, 600)]
+
+        self.assertEqual(browse(0, 1300), [600, 1200], "every 10 minutes of browsing")
+        pause = bb.WELLBEING_BREAK_RESET_SECONDS + 5
+        self.assertEqual(browse(1300 + pause, 1300 + pause + 595), [], "a 5-minute pause starts the count again")
+        self.assertEqual(browse(1300 + pause + 595, 1300 + pause + 700), [1300 + pause + 600])
+
 if __name__ == "__main__":
     unittest.main()

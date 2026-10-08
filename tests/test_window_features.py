@@ -235,9 +235,10 @@ class WindowFeatureTests(unittest.TestCase):
         win = self.win
         filtered = "getComputedStyle(document.documentElement).filter !== 'none'"
         self.assertFalse(win.dark_mode_active)
+        self.assertFalse(hasattr(win, "btn_dark"), "dark mode lives in Settings, not on the toolbar")
         try:
             wv = self.load("/darksite", "darksite")
-            win.on_dark_clicked(win.btn_dark)  # switched on while a dark page is showing
+            win.set_dark_mode(True)  # switched on while a dark page is showing
             self.assertTrue(spin(lambda: js(wv, filtered) == "false", 3), "already-dark page was inverted (turns white)")
             self.load("/thin", "thin")
             self.assertTrue(spin(lambda: js(wv, filtered) == "true", 3), "light page not darkened")
@@ -246,8 +247,134 @@ class WindowFeatureTests(unittest.TestCase):
             self.load("/darksite", "darksite")
             self.assertTrue(spin(lambda: js(wv, filtered) == "false", 3), "newly loaded dark page was inverted")
         finally:
-            if win.dark_mode_active:
-                win.on_dark_clicked(win.btn_dark)
+            win.set_dark_mode(False)
+
+    # ---- digital wellbeing ---------------------------------------------
+    def wellbeing_on(self):
+        win, tracker = self.win, bb.wellbeing_tracker()
+        win.wellbeing_enabled = True
+        win._clear_infobar()
+
+        def reset():
+            win.wellbeing_enabled = win.bedtime_enabled = False
+            win._update_bedtime(time.time())
+            win.set_dark_mode(False)
+            win._clear_infobar()
+            tracker.limits.clear()
+            tracker.clear()
+            tracker.tokens.clear()
+            tracker.bedtime_snoozed = tracker.bedtime_greeted = ""
+            tracker.last_active = tracker.next_break = None
+        self.addCleanup(reset)
+        return win, tracker
+
+    def infobar_text(self):
+        bar = self.win._infobar
+        return bar.get_content_area().get_children()[0].get_text() if bar else ""
+
+    def test_screen_time_counts_only_the_site_in_front_and_limits_close_it(self):
+        win, tracker = self.wellbeing_on()
+        wv, site = self.load("/thin", "thin"), "127.0.0.1"
+        now = time.time()
+        win._wellbeing_step(now, time.monotonic(), False)
+        self.assertEqual(tracker.used(site, now), 0, "not counted while another window is in front")
+        win._wellbeing_step(now, time.monotonic(), True)
+        self.assertEqual(tracker.used(site, now), win.WELLBEING_TICK_SECONDS)
+
+        tracker.set_limit(site, 1)
+        tracker.add(site, 60, now)
+        win._wellbeing_step(now, time.monotonic(), False)  # limits apply even when not in front
+        self.assertTrue(spin(lambda: (wv.get_uri() or "").startswith("arrow://times-up"), 5), wv.get_uri())
+        self.assertTrue(spin(lambda: js(wv, "document.querySelector('h1').innerText") == "Time's up for 127.0.0.1", 5))
+
+        wv.load_uri(self.base + "/done")  # the site stays closed for the rest of the day
+        self.assertTrue(spin(lambda: (wv.get_uri() or "").startswith("arrow://times-up"), 5), wv.get_uri())
+        allowed = tracker.allowed(site)
+        wv.load_uri("arrow://wellbeing-more?t=made-up")  # a page can't hand itself more time
+        self.assertTrue(spin(lambda: not wv.is_loading(), 5))
+        self.assertEqual(tracker.allowed(site), allowed)
+
+        wv.load_uri(self.base + "/done")
+        self.assertTrue(spin(lambda: (wv.get_uri() or "").startswith("arrow://times-up"), 5))
+        self.assertTrue(spin(lambda: js(wv, "document.querySelector('a.btn') !== null") == "true", 5))
+        more = js(wv, "document.querySelector('a.btn').href")
+        js(wv, "document.querySelector('a.btn').click()")
+        self.assertTrue(spin(lambda: wv.get_uri() == self.base + "/done" and wv.get_title() == "done", 10),
+                        "5 more minutes goes back to the page")
+        self.assertEqual(tracker.allowed(site), allowed + bb.WELLBEING_EXTRA_SECONDS)
+        wv.load_uri(more)
+        self.assertTrue(spin(lambda: wv.get_uri() == more and not wv.is_loading(), 5))
+        self.assertEqual(tracker.allowed(site), allowed + bb.WELLBEING_EXTRA_SECONDS, "each button works once")
+
+    def test_break_reminder_and_snooze(self):
+        win, tracker = self.wellbeing_on()
+        self.load("/thin", "thin")
+        now = time.monotonic()
+        win._wellbeing_step(time.time(), now, True)
+        win._wellbeing_step(time.time(), now + 5, True)
+        self.assertIsNone(win._infobar)
+        tracker.next_break = now + 6
+        win._wellbeing_step(time.time(), now + 10, True)
+        self.assertIn(f"browsing for {win.break_interval_minutes} minutes", self.infobar_text())
+        win._infobar.response(1)  # Snooze 10 min
+        self.assertIsNone(win._infobar)
+        self.assertGreater(tracker.next_break, time.monotonic() + win.BREAK_SNOOZE_SECONDS - 5)
+
+    def test_bedtime_turns_pages_grey_also_with_dark_mode(self):
+        win, tracker = self.wellbeing_on()
+        filt = "getComputedStyle(document.documentElement).filter"
+        wv = self.load("/thin", "thin")
+        win.bedtime_enabled = True
+        win.bedtime_start = time.strftime("%H:%M", time.localtime(time.time() - 3600))
+        win.bedtime_end = time.strftime("%H:%M", time.localtime(time.time() + 3600))
+        win._update_bedtime(time.time())
+        self.assertTrue(spin(lambda: "grayscale" in js(wv, filt), 3), js(wv, filt))
+        self.assertIn("bedtime", self.infobar_text())
+
+        win.set_dark_mode(True)
+        self.assertTrue(spin(lambda: "invert" in js(wv, filt) and "grayscale" in js(wv, filt), 3), js(wv, filt))
+        win.set_dark_mode(False)
+        self.assertTrue(spin(lambda: "grayscale" in js(wv, filt) and "invert" not in js(wv, filt), 3), js(wv, filt))
+
+        before = len(win._tab_boxes())
+        self.addCleanup(lambda: [win.close_tab(t) for t in win._tab_boxes()[before:]])
+        win.create_new_tab(self.base + "/blank")
+        new = win.get_active_webview()
+        self.assertTrue(spin(lambda: not new.is_loading() and "grayscale" in js(new, filt), 5), "new tabs are grey too")
+
+        win._infobar.response(1)  # Not tonight
+        self.assertTrue(spin(lambda: js(new, filt) == "none", 3), js(new, filt))
+        win._update_bedtime(time.time())
+        self.assertFalse(win._bedtime_active, "stays off for the rest of the night")
+
+    def test_settings_adds_and_removes_a_site_limit(self):
+        win, tracker = self.wellbeing_on()
+        dialog = win.build_settings_dialog("wellbeing")
+        self.addCleanup(dialog.destroy)
+        controls = dialog._arrow_controls
+        controls["wellbeing_limit_site"].set_text("not a site")
+        controls["wellbeing_limit_add"].clicked()
+        self.assertEqual(tracker.limits, {})
+        controls["wellbeing_limit_site"].set_text("https://www.Example.co.uk/page")
+        controls["wellbeing_limit_minutes"].set_value(45)
+        controls["wellbeing_limit_add"].clicked()
+        self.assertEqual(tracker.limits, {"example.co.uk": 45})
+        with open(bb.WELLBEING_FILE) as f:
+            self.assertEqual(json.load(f)["limits"], {"example.co.uk": 45}, "saved to disk")
+
+        def buttons(widget):
+            if isinstance(widget, Gtk.Button):
+                yield widget
+            if isinstance(widget, Gtk.Container):
+                for child in widget.get_children():
+                    yield from buttons(child)
+        remove = [b for b in buttons(controls["wellbeing_limits_box"]) if b.get_label() == "Remove"]
+        self.assertEqual(len(remove), 1)
+        remove[0].clicked()
+        self.assertEqual(tracker.limits, {})
+
+        controls["wellbeing_enabled"].set_active(False)
+        self.assertFalse(win.wellbeing_enabled)
 
     # ---- tabs ----------------------------------------------------------
     def test_switching_tabs_shows_that_tabs_address_and_title(self):
@@ -1007,7 +1134,7 @@ class WindowFeatureTests(unittest.TestCase):
         try:
             stack = dialog._arrow_stack
             self.assertEqual([stack.child_get_property(c, "name") for c in stack.get_children()],
-                             ["general", "privacy", "data", "performance", "about"])
+                             ["general", "privacy", "data", "performance", "wellbeing", "about"])
             self.assertEqual(stack.get_visible_child_name(), "privacy")
             controls = dialog._arrow_controls
             for key, sw in controls.items():
