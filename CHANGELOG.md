@@ -3,6 +3,12 @@
 All notable changes to Arrow Browser (called Bharat Browser up to 1.5.19). Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.6.1] - 2026-10-08
+
+### Changed
+- **New Arrow logo.** The plain globe icon is replaced by an "A" whose tip is an arrow, crossed by an orbiting arrow, in a cyan-to-violet gradient on a dark tile. It stays readable at small sizes, so it works in the taskbar and app menu too.
+- **Where you see it:** fresh installs and the new `.deb`, `.rpm` and Fedora packages use it. The in-app updater only replaces the browser itself, not its icon files, so a copy that updates itself keeps the old globe until you install the new package. Nothing else changes.
+
 ## [1.6.0] - 2026-10-07
 
 ### Changed

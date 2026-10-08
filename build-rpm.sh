@@ -78,6 +78,8 @@ python3 -m py_compile /usr/share/arrow-browser/arrow_browser.py >/dev/null 2>&1 
 if [ \$1 -eq 0 ]; then rm -rf /usr/share/arrow-browser/__pycache__; fi
 
 %changelog
+* Thu Oct 08 2026 Arrow Browser Developer <Sangam1112@users.noreply.github.com> - 1.6.1-1
+- New Arrow logo
 * Wed Oct 07 2026 Arrow Browser Developer <Sangam1112@users.noreply.github.com> - 1.6.0-1
 - Bharat Browser is now Arrow Browser, licensed under the GNU GPL v3
 * Wed Oct 07 2026 Bharat Browser Developer <developer@bharatbrowser.org> - 1.5.19-1
