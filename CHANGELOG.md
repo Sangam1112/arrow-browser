@@ -3,6 +3,18 @@
 All notable changes to Arrow Browser (called Bharat Browser up to 1.5.19). Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.6.2] - 2026-10-08
+
+### Added
+- **Digital Wellbeing** (Settings → 🌱 Digital Wellbeing). It's off until you switch it on, and everything it records stays on your computer.
+  - **Screen time:** how long you spent on each website today and over the last 7 days. Time only counts while Arrow is the window in front of you. Private windows aren't counted.
+  - **Daily site limits:** give a site a number of minutes per day, for example youtube.com for 30 minutes. When the time is used up, that site's tabs show a "Time's up" page instead, with a button for 5 more minutes. Limits start again at midnight and also apply in private windows.
+  - **Break reminders:** after 45 minutes of browsing (you can change this), a gentle reminder to rest your eyes. You can snooze it for 10 minutes. Stepping away for 5 minutes starts the count again.
+  - **Bedtime wind-down:** between the times you choose (11 pm to 7 am to start with), pages turn greyscale so they're less tempting, and you get one reminder. "Not tonight" switches it off until the next evening. It works together with dark mode.
+
+### Changed
+- **The dark mode (moon) button is no longer on the toolbar.** Dark mode for websites is in Settings → General, where it already was, and your setting is kept.
+
 ## [1.6.1] - 2026-10-08
 
 ### Changed
