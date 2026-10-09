@@ -64,7 +64,9 @@ def rpm():
     header = run(["rpm", "-qp", "--queryformat", "%{VERSION}-%{RELEASE}", name]).decode()
     if header != f"{VERSION}-1":
         problems.append(f"{name}: header says {header}")
-    cpio = subprocess.run(f"rpm2cpio '{name}' | cpio -i --to-stdout ./{APP} 2>/dev/null", shell=True, capture_output=True).stdout
+    payload = run(["rpm2cpio", name])
+    cpio = subprocess.run(["cpio", "-i", "--to-stdout", f"./{APP}"], input=payload,
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout
     check_app(name, cpio)
 
 

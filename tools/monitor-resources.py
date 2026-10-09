@@ -36,7 +36,6 @@ import csv
 import os
 import re
 import signal
-import sys
 import time
 
 ROLE_EXECUTABLE_NAMES = {

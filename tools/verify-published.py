@@ -2,6 +2,9 @@
 """Check a published release exactly as the in-app updater will: download
 arrow_browser.py and package.json from the vX.Y.Z tag on GitHub, then verify the
 SHA-256 and the Ed25519 signature with the verifier built into the app.
+The verifier and public key come from this repository, never from the download:
+installed copies check an update with their own code, and running downloaded
+code here would let a tampered release vouch for itself.
 
   tools/verify-published.py [version]     (default: the version in package.json)
 """
@@ -35,7 +38,8 @@ def main():
         version = sys.argv[1] if len(sys.argv) > 1 else json.load(f)["version"]
     base = f"https://raw.githubusercontent.com/{REPO}/v{version}/"
     source, pkg = fetch(base + "arrow_browser.py"), json.loads(fetch(base + "package.json"))
-    text = source.decode()
+    with open(os.path.join(ROOT, "arrow_browser.py")) as f:
+        text = f.read()
     ns = {"hashlib": hashlib,
           "UPDATE_PUBLIC_KEY_HEX": re.search(r'^UPDATE_PUBLIC_KEY_HEX = "(\w+)"', text, re.M).group(1),
           "_UPDATE_SIGNATURE_PREFIX": b"bharat-browser-update\n"}
