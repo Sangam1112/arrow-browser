@@ -14,7 +14,11 @@
 [![Installer](https://img.shields.io/badge/installer-~120%20KB-brightgreen.svg)](#-small-by-design)
 [![Updates](https://img.shields.io/badge/updates-signed%20(Ed25519)-6366f1.svg)](#-keeping-it-up-to-date)
 
-[**Highlights**](#-highlights) · [**Benchmarks**](#-benchmarks) · [**Install**](#-install) · [**Update**](#-keeping-it-up-to-date) · [**Shortcuts**](#-keyboard-shortcuts) · [**Privacy**](#-privacy--what-it-connects-to)
+[**Highlights**](#-highlights) · [**Screenshots**](#-screenshots) · [**Benchmarks**](#-benchmarks) · [**Install**](#-install) · [**Update**](#-keeping-it-up-to-date) · [**Shortcuts**](#-keyboard-shortcuts) · [**Privacy**](#-privacy--what-it-connects-to)
+
+<br>
+
+<img src="docs/screenshots/arrow-tour.gif" width="860" alt="A short tour of Arrow Browser: tabs, the padlock's site controls, the main menu and every Settings page">
 
 </div>
 
@@ -63,6 +67,47 @@ It is a native GTK3 desktop app, not a repackaged Chromium or Electron. The ad b
 **🪶 Light on your computer**
 - **Sleeps tabs you aren't using** and has a Low Memory Mode, so older PCs stay responsive.
 - **Signed self-updates** (Ed25519): a release that isn't signed by the project key is never installed.
+
+---
+
+## 📸 Screenshots
+
+<table>
+  <tr>
+    <td align="center" valign="top"><b>Browsing</b><br><img src="docs/screenshots/browser.png" alt="Arrow Browser showing a Wikipedia article in three tabs" width="420"></td>
+    <td align="center" valign="top"><b>Padlock: certificate &amp; per-site controls</b><br><img src="docs/screenshots/site-controls.png" alt="Site popover with certificate details and per-site switches" width="420"></td>
+  </tr>
+  <tr>
+    <td align="center" valign="top"><b>Main menu</b><br><img src="docs/screenshots/main-menu.png" alt="Main menu" width="420"></td>
+    <td align="center" valign="top"><b>Tab Memory</b><br><img src="docs/screenshots/tab-memory.png" alt="Tab Memory dialog listing memory use per tab" width="420"></td>
+  </tr>
+</table>
+
+### ⚙️ Settings
+
+Every Settings page, in order (Menu → Settings).
+
+<table>
+  <tr>
+    <td align="center" valign="top"><b>General</b><br><img src="docs/screenshots/settings-general.png" alt="General settings: homepage and startup" width="400"></td>
+    <td align="center" valign="top"><b>General (continued)</b><br><img src="docs/screenshots/settings-general-2.png" alt="General settings: search engine, download folder, dark mode" width="400"></td>
+  </tr>
+  <tr>
+    <td align="center" valign="top"><b>Privacy &amp; Security</b><br><img src="docs/screenshots/settings-privacy.png" alt="Privacy and security settings: tracking protection and connections" width="400"></td>
+    <td align="center" valign="top"><b>Privacy &amp; Security (continued)</b><br><img src="docs/screenshots/settings-privacy-2.png" alt="Privacy and security settings: passwords and sites" width="400"></td>
+  </tr>
+  <tr>
+    <td align="center" valign="top"><b>History &amp; Data</b><br><img src="docs/screenshots/settings-history-data.png" alt="History and data settings" width="400"></td>
+    <td align="center" valign="top"><b>Performance</b><br><img src="docs/screenshots/settings-performance.png" alt="Performance settings" width="400"></td>
+  </tr>
+  <tr>
+    <td align="center" valign="top"><b>Digital Wellbeing</b><br><img src="docs/screenshots/settings-wellbeing.png" alt="Digital Wellbeing settings: screen time and daily limits" width="400"></td>
+    <td align="center" valign="top"><b>Digital Wellbeing (continued)</b><br><img src="docs/screenshots/settings-wellbeing-2.png" alt="Digital Wellbeing settings: breaks and bedtime" width="400"></td>
+  </tr>
+  <tr>
+    <td align="center" valign="top"><b>About</b><br><img src="docs/screenshots/settings-about.png" alt="About page with version and update check" width="400"></td>
+  </tr>
+</table>
 
 ---
 
