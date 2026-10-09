@@ -59,8 +59,11 @@ It is a native GTK3 desktop app, not a repackaged Chromium or Electron. The ad b
 **🧭 Everyday touches**
 - **Pinned tabs** that survive restarts, plus a one-key way to reopen a closed tab.
 - **Tab Memory** (main menu): see which tab is using the most memory, then suspend or close it from the list.
-- **Switch in a minute**: import bookmarks and history from Firefox, Chrome, Brave, Edge, Vivaldi, Opera and more.
-- **Dark mode for websites** (Settings → General) that darkens bright pages and leaves sites that are already dark alone.
+- **Search shortcuts**: type `w taj mahal` for Wikipedia, `yt lofi` for YouTube, or add your own search engines. New installs search with DuckDuckGo; Brave Search, Startpage, Qwant, Ecosia, Google and Bing are a click away.
+- **Downloads you can pause and resume**, with live speed and time left. A download cut off by a bad connection can pick up where it stopped.
+- **🔊 on tabs that play sound**: click it to mute the tab.
+- **Switch in a minute**: import bookmarks and history from Firefox, Chrome, Brave, Edge, Vivaldi, Opera and more. Export them again, or back up your settings and bookmarks to one file.
+- **Light or dark look** for the browser itself, and **dark mode for websites** that darkens bright pages and leaves sites that are already dark alone (both in Settings → General).
 - **Digital Wellbeing** (Settings → Digital Wellbeing, off until you turn it on): screen time per site, daily limits that close a site once its time is used up, break reminders, and a bedtime wind-down that turns pages greyscale. It all stays on your computer.
 - **A friendly offline page** that reloads itself when you're back online, with a kite game while you wait 🪁.
 

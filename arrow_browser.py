@@ -98,7 +98,6 @@ def move_legacy_data(pairs=LEGACY_DATA_DIRS):
 def _prefer_newest_copy():
     """If this is the per-user updated copy and the system package has since been upgraded past it, drop this
     stale copy and start the system one, so an old per-user copy can never shadow a newer package."""
-    import re
     here = os.path.abspath(__file__)
     if os.path.dirname(here) != USER_INSTALL_DIR or not os.path.isfile(SYSTEM_SCRIPT):
         return
@@ -239,6 +238,7 @@ import tempfile
 import time
 import threading
 import subprocess
+import urllib.error
 import urllib.parse
 import urllib.request
 import gi
@@ -532,6 +532,187 @@ def is_risky_download(filename):
 # down every open private window mid-session with no warning.
 _LIVE_WINDOW_COUNT = 0
 
+# ---------------------------------------------------------------------------
+# Pausing and resuming downloads. WebKit can only cancel a download, and deletes what it had
+# received. So Pause keeps those bytes (in "<file>.part"), and Resume asks the server for the rest
+# ("Range: bytes=N-") itself, with the page's cookies and the browser's user agent.
+# ---------------------------------------------------------------------------
+DOWNLOAD_PART_SUFFIX = ".part"
+DOWNLOAD_CHUNK_BYTES = 64 * 1024
+
+
+def format_bytes(n):
+    n = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
+def format_duration(seconds):
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds} s"
+    if seconds < 3600:
+        return f"{seconds // 60} min {seconds % 60:02d} s"
+    return f"{seconds // 3600} h {seconds // 60 % 60:02d} min"
+
+
+def parse_content_range(value):
+    """'bytes 100-199/1000' → (100, 199, 1000); the total is None for '/*'. None if malformed."""
+    m = re.fullmatch(r"\s*bytes\s+(\d+)-(\d+)/(\d+|\*)\s*", value or "")
+    if not m:
+        return None
+    start, end = int(m.group(1)), int(m.group(2))
+    total = None if m.group(3) == "*" else int(m.group(3))
+    if end < start or (total is not None and end >= total):
+        return None
+    return start, end, total
+
+
+def resume_plan(status, content_range, offset):
+    """What a resumed request's answer means for a .part file holding `offset` bytes:
+    ("append", total) — it sends the rest; ("restart", total) — it sends the whole file again
+    (no resume support, or the file changed); ("done", offset) — nothing was missing; ("fail", message)."""
+    if status == 206:
+        parsed = parse_content_range(content_range)
+        if parsed is None or parsed[0] != offset:
+            return "fail", "the server sent the wrong part of the file"
+        return "append", parsed[2]
+    if status == 200:
+        return "restart", None
+    if status == 416 and offset:
+        m = re.fullmatch(r"\s*bytes\s+\*/(\d+)\s*", content_range or "")
+        if m and int(m.group(1)) == offset:
+            return "done", offset
+    return "fail", f"the server answered {status}"
+
+
+def download_status_text(entry, now=None):
+    """The second line of a download in the Downloads window."""
+    received, total = entry.get("received", 0), entry.get("total", 0)
+    amount = f"{format_bytes(received)} of {format_bytes(total)}" if total else format_bytes(received)
+    status = entry.get("status", "")
+    if status == "Downloading...":
+        speed = entry.get("speed", 0)
+        parts = [amount]
+        if speed > 0:
+            parts.append(f"{format_bytes(speed)}/s")
+            if total and total > received:
+                parts.append(f"{format_duration((total - received) / speed)} left")
+        if entry.get("note"):
+            parts.append(entry["note"])
+        return " · ".join(parts)
+    if status == "Paused":
+        return f"Paused · {amount}"
+    if status == "Completed ✅":
+        return f"Done · {format_bytes(total or received)}"
+    if status == "Failed ❌":
+        return "Failed" + (f": {entry['error']}" if entry.get("error") else "") + (f" · {amount}" if received else "")
+    return status
+
+
+def keep_partial_download(working_path, part_path):
+    """Keep what a download has received so far before WebKit deletes it: a hard link costs
+    nothing; a copy is the fallback on file systems without links. Returns the bytes kept."""
+    try:
+        if os.path.exists(part_path):
+            os.remove(part_path)
+        os.link(working_path, part_path)
+    except OSError:
+        shutil.copyfile(working_path, part_path)
+    os.chmod(part_path, 0o600)
+    return os.path.getsize(part_path)
+
+
+class _ResumeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Redirects for a resumed download: the cookies (and Referer) belong to the site they were
+    looked up for, so they are dropped when a redirect leaves it; https never drops to http."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        old, new = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
+        if old.scheme == "https" and new.scheme != "https":
+            raise urllib.error.HTTPError(newurl, code, "redirected to an insecure (http) address", headers, fp)
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_req is not None and (old.hostname or "").lower() != (new.hostname or "").lower():
+            for name in ("Cookie", "Referer", "Authorization"):
+                new_req.remove_header(name)
+        return new_req
+
+
+_RESUME_OPENER = urllib.request.build_opener(_ResumeRedirectHandler)
+
+
+class ResumeJob:
+    """Downloads the rest of a file into its .part in a background thread. `on_progress(received, total)`
+    runs in that thread (it only stores numbers); `on_end(outcome, detail)` runs on the GTK main loop with
+    outcome "done", "paused" or "failed"."""
+
+    def __init__(self, url, part_path, headers, on_progress, on_end, opener=None):
+        self.url, self.part_path, self.headers = url, part_path, dict(headers)
+        self.on_progress, self.on_end = on_progress, on_end
+        self.opener = opener or _RESUME_OPENER.open
+        self.stop_requested = False
+        self.note = ""
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self.thread.start()
+
+    def stop(self):
+        self.stop_requested = True
+
+    def _finish(self, outcome, detail=None):
+        GLib.idle_add(lambda: (self.on_end(outcome, detail), False)[1])
+
+    def _run(self):
+        try:
+            offset = os.path.getsize(self.part_path) if os.path.exists(self.part_path) else 0
+            headers = dict(self.headers)
+            if offset:
+                headers["Range"] = f"bytes={offset}-"
+            else:
+                headers.pop("If-Range", None)
+            request = urllib.request.Request(self.url, headers=headers)
+            try:
+                response = self.opener(request, timeout=30)
+            except urllib.error.HTTPError as e:
+                response = e  # a 416 arrives as an "error" with headers we need
+            with response:
+                status = response.status if hasattr(response, "status") else response.code
+                plan, value = resume_plan(status, response.headers.get("Content-Range"), offset)
+                if plan == "fail":
+                    return self._finish("failed", value)
+                if plan == "done":
+                    self.on_progress(offset, offset)
+                    return self._finish("done")
+                if plan == "restart":
+                    offset = 0
+                    if headers.get("Range"):
+                        self.note = "this server can't resume, so it started again"
+                    length = response.headers.get("Content-Length")
+                    value = int(length) if length and length.isdigit() else None
+                total = value or 0
+                received = offset
+                fd = os.open(self.part_path, os.O_CREAT | os.O_WRONLY | (os.O_APPEND if offset else os.O_TRUNC), 0o600)
+                with os.fdopen(fd, "ab" if offset else "wb") as f:
+                    self.on_progress(received, total)
+                    while True:
+                        if self.stop_requested:
+                            return self._finish("paused")
+                        chunk = response.read(DOWNLOAD_CHUNK_BYTES)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        received += len(chunk)
+                        self.on_progress(received, total)
+                if total and received < total:
+                    return self._finish("failed", "the connection closed before the whole file arrived")
+                self._finish("done")
+        except Exception as e:
+            self._finish("failed", str(getattr(e, "reason", None) or e))
+
+
 CACHE_DIR = os.path.expanduser("~/.cache/arrow-browser")
 SESSION_FILE = os.path.join(CONFIG_DIR, "session.json")
 HISTORY_FILE = os.path.join(CONFIG_DIR, "history.json")
@@ -629,6 +810,27 @@ def ed25519_verify(public_key, message, signature):
 
 
 PROJECT_PAGE_URL = "https://github.com/Sangam1112/arrow-browser"
+
+# The web engine is the system's WebKitGTK, updated by the package manager, never by Arrow's
+# updater. WebKitGTK only fixes security bugs in its newest stable series, so About warns below
+# this. Keep it one stable series behind the newest (2.54 is newest as of October 2026).
+MIN_WEBKIT_VERSION = (2, 52, 0)
+
+
+def webkit_version():
+    """The running WebKitGTK version as (major, minor, micro)."""
+    return (WebKit2.get_major_version(), WebKit2.get_minor_version(), WebKit2.get_micro_version())
+
+
+def webkit_version_note(version, minimum=None):
+    """(is_outdated, hint) for the About page's web engine row."""
+    minimum = minimum or MIN_WEBKIT_VERSION
+    if tuple(version) < tuple(minimum):
+        return True, (f"Older than {minimum[0]}.{minimum[1]}, so it may be missing security fixes. "
+                      "Arrow can't update it: update your system's packages, or move to a newer "
+                      "release of your Linux distribution.")
+    return False, ("Updated by your system's package manager, not by Arrow. "
+                   "Keep system updates on to get its security fixes.")
 
 # Where the updater learns the latest version. GitHub's API is asked first: raw.githubusercontent.com
 # caches the branch address for several minutes, so right after a release it can still report the old
@@ -837,13 +1039,86 @@ CHROME_USER_AGENT = (
 )
 
 SEARCH_ENGINES = {
+    "DuckDuckGo": "https://duckduckgo.com/?q={query}",
+    "Brave Search": "https://search.brave.com/search?q={query}",
+    "Startpage": "https://www.startpage.com/do/search?q={query}",
+    "Qwant": "https://www.qwant.com/?q={query}",
+    "Ecosia": "https://www.ecosia.org/search?q={query}",
     "Google": "https://www.google.com/search?q={query}",
     "Bing": "https://www.bing.com/search?q={query}",
-    "DuckDuckGo": "https://duckduckgo.com/?q={query}",
     "Yahoo": "https://search.yahoo.com/search?p={query}",
 }
-DEFAULT_SEARCH_ENGINE = "Google"
-DEFAULT_HOMEPAGE = "https://www.google.com"
+# New installs search with DuckDuckGo; a choice already saved in settings.json is kept.
+DEFAULT_SEARCH_ENGINE = "DuckDuckGo"
+DEFAULT_HOMEPAGE = "https://duckduckgo.com"
+
+# Address-bar shortcuts: "w taj mahal" searches Wikipedia. Each is (keyword, name, address);
+# the user's own (Settings → General → Search shortcuts) are added to these.
+SEARCH_SHORTCUTS = (
+    ("d", "DuckDuckGo", SEARCH_ENGINES["DuckDuckGo"]),
+    ("br", "Brave Search", SEARCH_ENGINES["Brave Search"]),
+    ("sp", "Startpage", SEARCH_ENGINES["Startpage"]),
+    ("g", "Google", SEARCH_ENGINES["Google"]),
+    ("b", "Bing", SEARCH_ENGINES["Bing"]),
+    ("w", "Wikipedia", "https://en.wikipedia.org/wiki/Special:Search?search={query}"),
+    ("yt", "YouTube", "https://www.youtube.com/results?search_query={query}"),
+    ("gh", "GitHub", "https://github.com/search?q={query}"),
+    ("map", "OpenStreetMap", "https://www.openstreetmap.org/search?query={query}"),
+)
+MAX_CUSTOM_SEARCH_ENGINES = 50
+
+
+def search_url(template, query):
+    """The address for searching `query` with `template` ("{query}" marks where it goes).
+    Not str.format: a user's own template may contain other braces."""
+    return template.replace("{query}", urllib.parse.quote(query, safe=""))
+
+
+def normalize_search_template(url):
+    """A user-typed search address with "%s" (as in other browsers) or "{query}" where the
+    search goes, as a "{query}" template. None if it isn't an http(s) address with one."""
+    url = (url or "").strip().replace("%s", "{query}")
+    parsed = urllib.parse.urlparse(url.replace("{query}", "x"))
+    if parsed.scheme not in ("http", "https") or not parsed.netloc or url.count("{query}") != 1:
+        return None
+    return url
+
+
+def clean_custom_search_engines(entries):
+    """The user's own search engines from settings.json, keeping only well-formed ones:
+    [{"name", "keyword", "url"}]. Names and keywords may not clash with built-in ones or each other."""
+    taken_names = {n.lower() for n in SEARCH_ENGINES}
+    taken_keys = {k for k, _n, _u in SEARCH_SHORTCUTS}
+    cleaned = []
+    for entry in entries if isinstance(entries, list) else ():
+        if not isinstance(entry, dict) or len(cleaned) >= MAX_CUSTOM_SEARCH_ENGINES:
+            continue
+        name = str(entry.get("name", "")).strip()[:40]
+        keyword = str(entry.get("keyword", "")).strip().lower()[:20]
+        url = normalize_search_template(str(entry.get("url", "")))
+        if not name or not url or name.lower() in taken_names or " " in keyword or keyword in taken_keys:
+            continue
+        taken_names.add(name.lower())
+        if keyword:
+            taken_keys.add(keyword)
+        cleaned.append({"name": name, "keyword": keyword, "url": url})
+    return cleaned
+
+
+def resolve_search_shortcut(text, custom_engines=()):
+    """For "<keyword> <search>" typed in the address bar, the shortcut's search address; else None."""
+    keyword, _sep, query = text.strip().partition(" ")
+    query = query.strip()
+    if not query:
+        return None
+    keyword = keyword.lower()
+    for entry in custom_engines:
+        if entry.get("keyword") == keyword:
+            return search_url(entry["url"], query)
+    for key, _name, template in SEARCH_SHORTCUTS:
+        if key == keyword:
+            return search_url(template, query)
+    return None
 
 
 def sanitize_homepage_url(url_str):
@@ -1207,6 +1482,91 @@ def save_site_settings(settings):
         os.replace(temp_file, SITE_SETTINGS_FILE)
     except Exception as e:
         print("Site settings save note:", e)
+
+
+
+def export_netscape_bookmarks(entries):
+    """Bookmarks as the HTML file every browser can import (Netscape format)."""
+    esc = html_module.escape
+    lines = ["<!DOCTYPE NETSCAPE-Bookmark-file-1>",
+             '<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">',
+             "<TITLE>Bookmarks</TITLE>", "<H1>Bookmarks</H1>", "<DL><p>"]
+    for b in entries:
+        url = b.get("url")
+        if not _is_web_url(url):
+            continue
+        try:
+            added = int(float(b.get("added") or 0))
+        except (TypeError, ValueError):
+            added = 0
+        lines.append(f'    <DT><A HREF="{esc(url, quote=True)}" ADD_DATE="{added}">{esc(str(b.get("title") or url))}</A>')
+    lines.append("</DL><p>")
+    return "\n".join(lines) + "\n"
+
+
+# Backups (Settings → History & Data). Settings that belong to one computer stay out.
+BACKUP_FORMAT = 1
+BACKUP_MAX_BYTES = 20 * 1024 * 1024
+BACKUP_MACHINE_SETTINGS = ("download_dir", "gpu_acceleration_enabled", "first_run_greeted")
+
+
+def clean_site_entry(entry):
+    """One site's settings from a backup, keeping only values Arrow itself would store."""
+    if not isinstance(entry, dict):
+        return {}
+    out = {}
+    for key in ("adblock", "javascript", "chrome_ua", "passwords"):
+        if isinstance(entry.get(key), bool):
+            out[key] = entry[key]
+    zoom = entry.get("zoom")
+    if isinstance(zoom, (int, float)) and not isinstance(zoom, bool) and 0.25 <= zoom <= 5:
+        out["zoom"] = float(zoom)
+    perms = entry.get("permissions")
+    if isinstance(perms, dict):
+        perms = {k: v for k, v in perms.items() if k in PERMISSION_KINDS and v in ("allow", "deny")}
+        if perms:
+            out["permissions"] = perms
+    return out
+
+
+def build_backup(settings, bookmarks, site_settings, now=None):
+    return {
+        "arrow_backup": BACKUP_FORMAT,
+        "app_version": APP_VERSION,
+        "created": int(now or time.time()),
+        "settings": {k: v for k, v in settings.items() if k not in BACKUP_MACHINE_SETTINGS},
+        "bookmarks": [b for b in bookmarks if isinstance(b, dict) and _is_web_url(b.get("url"))],
+        "site_settings": site_settings,
+    }
+
+
+def read_backup(raw):
+    """Parse a backup file's bytes into {"settings", "bookmarks", "site_settings"}.
+    Raises ValueError with a message for the user if it isn't an Arrow backup."""
+    if len(raw) > BACKUP_MAX_BYTES:
+        raise ValueError("the file is too large to be an Arrow backup")
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise ValueError("it isn't an Arrow backup file") from None
+    if not isinstance(data, dict) or data.get("arrow_backup") != BACKUP_FORMAT:
+        raise ValueError("it isn't an Arrow backup file")
+    settings = data.get("settings") if isinstance(data.get("settings"), dict) else {}
+    bookmarks = data.get("bookmarks") if isinstance(data.get("bookmarks"), list) else []
+    sites = data.get("site_settings") if isinstance(data.get("site_settings"), dict) else {}
+    marks = []
+    for b in bookmarks[:BOOKMARKS_MAX_ENTRIES]:
+        if isinstance(b, dict) and _is_web_url(b.get("url")):
+            added = b.get("added")
+            marks.append({"url": b["url"], "title": str(b.get("title") or b["url"])[:500],
+                          "added": added if isinstance(added, (int, float)) and not isinstance(added, bool) else time.time()})
+    cleaned_sites = {}
+    for host, entry in sites.items():
+        entry = clean_site_entry(entry)
+        if isinstance(host, str) and host and " " not in host and "/" not in host and entry:
+            cleaned_sites[host.lower()] = entry
+    return {"settings": {k: v for k, v in settings.items() if isinstance(k, str) and k not in BACKUP_MACHINE_SETTINGS},
+            "bookmarks": marks, "site_settings": cleaned_sites}
 
 
 def site_host_of(uri):
@@ -2510,6 +2870,116 @@ TYPED_TEXT_CHECK_JS = r"""
 TYPED_TEXT_WORLD = "arrow-sleep"
 
 
+# Light theme (Settings → General → Browser theme). Layered over the dark app stylesheet at a
+# higher priority, so it only needs to change colours, and it can be added or removed while running.
+UI_THEMES = ("dark", "light")
+DEFAULT_UI_THEME = "dark"
+LIGHT_THEME_CSS = b"""
+window { background-color: #f4f6fa; }
+headerbar.arrow-titlebar { background-color: #eef1f6; border-bottom-color: rgba(15, 23, 42, 0.08); color: #0f172a; }
+headerbar.arrow-titlebar .title, headerbar.arrow-titlebar .subtitle, headerbar.arrow-titlebar label,
+headerbar.arrow-titlebar button { color: #0f172a; }
+.top-bar { background-color: #ffffff; border-bottom-color: rgba(15, 23, 42, 0.08); }
+.brand-label { color: #1e293b; }
+.nav-group { background: rgba(15, 23, 42, 0.04); border-color: rgba(15, 23, 42, 0.08); }
+.flat-icon-btn { color: #475569; }
+.flat-icon-btn:hover { background: rgba(15, 23, 42, 0.07); color: #0f172a; }
+.flat-icon-btn:active { background: rgba(99, 102, 241, 0.18); }
+notebook, notebook header { background-color: #eef1f6; }
+notebook header { border-bottom-color: rgba(15, 23, 42, 0.08); }
+notebook tab { color: #64748b; }
+notebook tab:hover { background-color: rgba(15, 23, 42, 0.05); color: #1e293b; }
+notebook tab:checked { background-color: #ffffff; color: #0f172a; }
+notebook tab button { color: #475569; border-color: transparent; }
+notebook tab button:hover { background: rgba(15, 23, 42, 0.07); border-color: transparent; }
+entry.url-entry { background-color: rgba(15, 23, 42, 0.05); color: #0f172a; border-color: rgba(15, 23, 42, 0.12);
+                  caret-color: #4f46e5; }
+entry.url-entry image { color: #64748b; }
+entry.url-entry.url-secure image.left { color: #16a34a; }
+entry.url-entry.url-insecure image.left { color: #dc2626; }
+entry.url-entry.url-mixed image.left { color: #d97706; }
+entry.url-entry:focus { background-color: #ffffff; }
+button { color: #334155; border-color: rgba(15, 23, 42, 0.12); }
+button:hover { background: rgba(15, 23, 42, 0.06); border-color: rgba(15, 23, 42, 0.2); color: #0f172a; }
+.btn-shield { background: rgba(5, 150, 105, 0.10); color: #047857; border-color: rgba(5, 150, 105, 0.3); }
+.btn-shield:hover { background: rgba(5, 150, 105, 0.18); color: #065f46; }
+statusbar { background-color: #eef1f6; color: #64748b; border-top-color: rgba(15, 23, 42, 0.08); }
+.update-dialog-box { background: #ffffff; color: #0f172a; box-shadow: 0 20px 40px rgba(15, 23, 42, 0.18); }
+.update-icon-text { color: #059669; }
+.update-restart-btn { color: #4338ca; }
+.update-restart-btn:hover { color: #312e81; }
+.update-dialog-text { color: #0f172a; }
+.update-close-btn { color: #64748b; }
+.update-close-btn:hover { background: rgba(15, 23, 42, 0.08); color: #0f172a; }
+.zoom-indicator { background: rgba(255, 255, 255, 0.95); color: #0f172a; border-color: rgba(15, 23, 42, 0.12);
+                  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18); }
+.greeting-banner { color: #0f172a; border-color: rgba(15, 23, 42, 0.12); box-shadow: 0 12px 28px rgba(15, 23, 42, 0.15); }
+.find-bar { background: rgba(255, 255, 255, 0.97); border-color: rgba(15, 23, 42, 0.12);
+            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18); }
+.find-bar entry { background-color: rgba(15, 23, 42, 0.04); color: #0f172a; border-color: rgba(15, 23, 42, 0.15); }
+.find-match-label { color: #64748b; }
+window.arrow-dialog, .arrow-dialog { background-color: #f8fafc; color: #0f172a; }
+.arrow-dialog label, .arrow-dialog checkbutton, .arrow-dialog radiobutton { color: #0f172a; }
+.arrow-dialog check, .arrow-dialog radio { background-color: #ffffff; border-color: rgba(15, 23, 42, 0.25); color: #ffffff; }
+.arrow-dialog .settings-card { background-color: #ffffff; border-color: rgba(15, 23, 42, 0.08); }
+.arrow-dialog .settings-row-title { color: #0f172a; }
+.arrow-dialog .settings-section-title { color: #4f46e5; }
+.arrow-dialog .settings-hint-label { color: #64748b; }
+.arrow-dialog levelbar trough, .arrow-dialog progressbar trough { background-color: rgba(15, 23, 42, 0.08); }
+.arrow-dialog entry { background-color: #ffffff; color: #0f172a; border-color: rgba(15, 23, 42, 0.18); }
+.arrow-dialog combobox button { background-color: #ffffff; color: #0f172a; border-color: rgba(15, 23, 42, 0.18); }
+.settings-sidebar { background-color: #eef1f6; }
+.settings-nav list row { color: #475569; }
+.settings-nav list row:hover { background-color: rgba(15, 23, 42, 0.05); color: #0f172a; }
+.settings-nav list row:selected, .settings-nav list row:selected:focus, .settings-nav list row:selected:hover,
+.settings-nav list row:selected:backdrop { background-color: rgba(99, 102, 241, 0.14); color: #312e81;
+                                           box-shadow: inset 3px 0 0 #6366f1; }
+.arrow-dialog .settings-page-title, .arrow-dialog .settings-title { color: #0f172a; }
+.arrow-dialog .settings-page-blurb, .arrow-dialog .settings-subtitle { color: #64748b; }
+.settings-action-btn { background: #ffffff; color: #1e293b; border-color: rgba(15, 23, 42, 0.15); }
+.settings-action-btn:hover { background: #f1f5f9; border-color: rgba(15, 23, 42, 0.25); color: #0f172a; }
+.settings-danger-btn { background: rgba(220, 38, 38, 0.07); color: #b91c1c; border-color: rgba(220, 38, 38, 0.3); }
+.settings-danger-btn:hover { background: rgba(220, 38, 38, 0.14); color: #991b1b; }
+.arrow-dialog .settings-icon-bubble { background-image: linear-gradient(135deg, rgba(99, 102, 241, 0.16), rgba(139, 92, 246, 0.12));
+                                      border-color: rgba(99, 102, 241, 0.25); }
+.arrow-dialog switch, popover.arrow-menu switch { background-color: rgba(15, 23, 42, 0.12); border-color: rgba(15, 23, 42, 0.15); }
+.arrow-dialog switch:checked, popover.arrow-menu switch:checked { box-shadow: 0 0 8px rgba(99, 102, 241, 0.3); }
+.arrow-dialog switch slider, popover.arrow-menu switch slider { background-color: #ffffff; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.3); }
+.arrow-dialog .settings-chip { background-color: rgba(15, 23, 42, 0.05); border-color: rgba(15, 23, 42, 0.12); color: #334155; }
+.arrow-dialog .settings-chip-green { background-color: rgba(22, 163, 74, 0.1); border-color: rgba(22, 163, 74, 0.35); color: #15803d; }
+.arrow-dialog .settings-chip-amber { background-color: rgba(217, 119, 6, 0.1); border-color: rgba(217, 119, 6, 0.35); color: #b45309; }
+.arrow-dialog .settings-primary-btn, .settings-primary-btn { color: #ffffff; box-shadow: 0 3px 10px rgba(99, 102, 241, 0.3); }
+.arrow-dialog .settings-primary-btn label, .settings-primary-btn label { color: #ffffff; }
+.arrow-dialog separator { background-color: rgba(15, 23, 42, 0.08); }
+popover.arrow-menu, popover.arrow-menu > * { background-color: #ffffff; color: #0f172a; }
+popover.arrow-menu label, popover.arrow-menu modelbutton { color: #0f172a; }
+popover.arrow-menu modelbutton:hover { background-color: rgba(99, 102, 241, 0.12); }
+.arrow-infobar { background-image: linear-gradient(135deg, #e0e7ff, #dbeafe); border-bottom-color: rgba(99, 102, 241, 0.3); }
+.arrow-infobar label { color: #1e293b; }
+.theme-choice button { border-radius: 8px; padding: 6px 14px; }
+"""
+_LIGHT_THEME_PROVIDER = None
+
+
+def apply_ui_theme(theme):
+    """Switch the browser's own look (toolbar, tabs, menus, Settings) between dark and light, live.
+    Website colours are separate: that's "Dark mode for websites"."""
+    global _LIGHT_THEME_PROVIDER
+    screen = Gdk.Screen.get_default()
+    if screen is None:
+        return
+    if _LIGHT_THEME_PROVIDER is None:
+        _LIGHT_THEME_PROVIDER = Gtk.CssProvider()
+        _LIGHT_THEME_PROVIDER.load_from_data(LIGHT_THEME_CSS)
+        _LIGHT_THEME_PROVIDER._arrow_added = False
+    want = theme == "light"
+    if want and not _LIGHT_THEME_PROVIDER._arrow_added:
+        Gtk.StyleContext.add_provider_for_screen(screen, _LIGHT_THEME_PROVIDER, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
+    elif not want and _LIGHT_THEME_PROVIDER._arrow_added:
+        Gtk.StyleContext.remove_provider_for_screen(screen, _LIGHT_THEME_PROVIDER)
+    _LIGHT_THEME_PROVIDER._arrow_added = want
+
+
 class ArrowBrowserWindow(Gtk.Window):
     _global_css_loaded = False
 
@@ -2590,14 +3060,18 @@ class ArrowBrowserWindow(Gtk.Window):
 
         saved_settings = load_persistent_settings()
         self.dark_mode_active = saved_settings.get("dark_mode", False)
+        self.ui_theme = saved_settings.get("ui_theme", DEFAULT_UI_THEME)
+        if self.ui_theme not in UI_THEMES:
+            self.ui_theme = DEFAULT_UI_THEME
         self.download_dir = saved_settings.get("download_dir", "") or ""
         self.adblock_enabled = saved_settings.get("adblock_enabled", True)
         self.clearurls_enabled = saved_settings.get("clearurls_enabled", True)
         self.https_enabled = saved_settings.get("https_enabled", True)
         self.dev_tools_enabled = saved_settings.get("dev_tools_enabled", False)
         self.webrtc_enabled = saved_settings.get("webrtc_enabled", False)
+        self.custom_search_engines = clean_custom_search_engines(saved_settings.get("custom_search_engines", []))
         self.search_engine = saved_settings.get("search_engine", DEFAULT_SEARCH_ENGINE)
-        if self.search_engine not in SEARCH_ENGINES:
+        if self.search_engine not in self.search_engine_templates():
             self.search_engine = DEFAULT_SEARCH_ENGINE
         self.homepage = sanitize_homepage_url(saved_settings.get("homepage", DEFAULT_HOMEPAGE))
         self.open_homepage_on_startup = saved_settings.get("open_homepage_on_startup", False)
@@ -3250,6 +3724,7 @@ class ArrowBrowserWindow(Gtk.Window):
         if ArrowBrowserWindow._global_css_loaded:
             return
         ArrowBrowserWindow._global_css_loaded = True
+        apply_ui_theme(self.ui_theme)
         css_provider = Gtk.CssProvider()
         css_data = b"""
         * {
@@ -3347,6 +3822,13 @@ class ArrowBrowserWindow(Gtk.Window):
             color: #f8fafc;
             box-shadow: inset 0 -2px 0 0 #6366f1;
         }
+        notebook tab button {
+            background: transparent;
+            border-color: transparent;
+            padding: 0 4px;
+            min-height: 0;
+        }
+        notebook tab button:hover { background: rgba(255, 255, 255, 0.08); }
 
         entry.url-entry {
             background-color: rgba(255, 255, 255, 0.05);
@@ -3535,6 +4017,19 @@ class ArrowBrowserWindow(Gtk.Window):
             border-radius: 999px;
             min-height: 8px;
         }
+        .arrow-dialog progressbar trough {
+            background-color: rgba(255, 255, 255, 0.08);
+            background-image: none;
+            border: none;
+            border-radius: 999px;
+            min-height: 6px;
+        }
+        .arrow-dialog progressbar progress {
+            background-image: linear-gradient(to right, #6366f1, #8b5cf6);
+            border: none;
+            border-radius: 999px;
+            min-height: 6px;
+        }
         .arrow-dialog levelbar block.filled {
             background-color: #6366f1;
             border: none;
@@ -3575,7 +4070,10 @@ class ArrowBrowserWindow(Gtk.Window):
         }
         .settings-nav list row label { color: inherit; font-size: 13px; font-weight: 600; padding: 8px 10px; }
         .settings-nav list row:hover { background-color: rgba(255, 255, 255, 0.06); color: #f1f5f9; }
-        .settings-nav list row:selected {
+        .settings-nav list row:selected, .settings-nav list row:selected:focus,
+        .settings-nav list row:selected:hover, .settings-nav list row:selected:backdrop {
+            background-image: none;
+            outline: none;
             background-color: rgba(99, 102, 241, 0.22);
             color: #ffffff;
             box-shadow: inset 3px 0 0 #818cf8;
@@ -3669,6 +4167,11 @@ class ArrowBrowserWindow(Gtk.Window):
             border-color: rgba(34, 197, 94, 0.4);
             color: #86efac;
         }
+        .arrow-dialog .settings-chip-amber {
+            background-color: rgba(245, 158, 11, 0.14);
+            border-color: rgba(245, 158, 11, 0.4);
+            color: #fcd34d;
+        }
         .arrow-dialog .settings-primary-btn, .settings-primary-btn {
             background-image: linear-gradient(135deg, #6366f1, #8b5cf6);
             color: #ffffff;
@@ -3684,6 +4187,13 @@ class ArrowBrowserWindow(Gtk.Window):
             box-shadow: 0 5px 16px rgba(99, 102, 241, 0.55);
         }
         .arrow-dialog .settings-action-btn { border-radius: 10px; }
+        .theme-choice button { border-radius: 8px; padding: 6px 14px; }
+        .theme-choice button:checked {
+            background-image: linear-gradient(135deg, #6366f1, #8b5cf6);
+            border-color: transparent;
+            color: #ffffff;
+        }
+        .theme-choice button:checked label { color: #ffffff; }
         .arrow-dialog separator { background-color: rgba(255, 255, 255, 0.06); min-height: 1px; }
         popover.arrow-menu, popover.arrow-menu > * {
             background-color: #151a24;
@@ -3815,9 +4325,18 @@ class ArrowBrowserWindow(Gtk.Window):
         close_btn.set_tooltip_text("Close Tab")
         close_btn.connect("clicked", lambda b: self.close_tab(tab_box))
 
+        # Shown only while the tab plays sound or is muted; a click mutes or unmutes it.
+        audio_btn = Gtk.Button(label="🔊")
+        audio_btn.set_relief(Gtk.ReliefStyle.NONE)
+        audio_btn.set_focus_on_click(False)
+        audio_btn.connect("clicked", lambda b: self.toggle_tab_muted(tab_box))
+
         header_box.pack_start(tab_label, True, True, 0)
+        header_box.pack_start(audio_btn, False, False, 0)
         header_box.pack_start(close_btn, False, False, 0)
         header_box.show_all()
+        audio_btn.set_no_show_all(True)
+        audio_btn.hide()
 
         # EventBox so right-click (menu) and middle-click (close) work on the tab header.
         header_event = Gtk.EventBox()
@@ -3829,7 +4348,11 @@ class ArrowBrowserWindow(Gtk.Window):
         tab_box._arrow_webview = webview
         tab_box._arrow_label = tab_label
         tab_box._arrow_close_btn = close_btn
+        tab_box._arrow_audio_btn = audio_btn
         tab_box._arrow_pinned = False
+        for prop in ("notify::is-playing-audio", "notify::is-muted"):
+            webview._arrow_sig_ids.append(
+                (webview, webview.connect(prop, lambda _w, _p: self._update_tab_audio(tab_box))))
 
         if asleep and load_initial_uri and url:
             # Marked before the tab is added, so switching to it loads it.
@@ -4945,11 +5468,26 @@ class ArrowBrowserWindow(Gtk.Window):
         # know the name the server suggests (Content-Disposition), e.g. "Report.pdf" for ".../download?id=7".
         req = download.get_request()
         uri = (req.get_uri() if req else "") or ""
-        entry = {"filename": download_filename("", uri), "path": "", "status": "Downloading..."}
+        method = (req.get_http_method() if req else None) or "GET"
+        entry = {"filename": download_filename("", uri), "path": "", "status": "Downloading...",
+                 "url": uri, "received": 0, "total": 0, "speed": 0, "error": "", "note": "",
+                 "download": download, "context": context, "job": None,
+                 # Only a plain GET of a web address can be asked for again (a form's POST can't).
+                 "resumable": method.upper() == "GET" and uri.startswith(("http://", "https://"))}
         self.downloads_history.append(entry)
         download.connect("decide-destination", self.on_download_decide_destination, entry)
-        download.connect("finished", lambda d: self.on_download_finished(entry, d))
-        download.connect("failed", lambda d, err: self.on_download_failed(entry, err))
+        download.connect("received-data", lambda d, _n: self._on_download_progress(entry, d))
+        # Once paused or cancelled, the entry drops this WebKit download; its late "failed"/"finished"
+        # signals must not overwrite a download that has been resumed since.
+        download.connect("finished", lambda d: entry.get("download") is d and self.on_download_finished(entry, d))
+        download.connect("failed", lambda d, err: entry.get("download") is d and self.on_download_failed(entry, err))
+        self._refresh_downloads_window()
+
+    def _on_download_progress(self, entry, download):
+        entry["received"] = download.get_received_data_length()
+        response = download.get_response()
+        if response is not None and response.get_content_length():
+            entry["total"] = response.get_content_length()
 
     def on_download_decide_destination(self, download, suggested_filename, entry):
         downloads_dir = self.get_downloads_dir()
@@ -4964,6 +5502,19 @@ class ArrowBrowserWindow(Gtk.Window):
         target_path = self.unique_download_path(downloads_dir, filename)
         download.set_destination(GLib.filename_to_uri(target_path))
         entry["filename"], entry["path"] = os.path.basename(target_path), target_path
+        response = download.get_response()
+        if response is not None:
+            entry["url"] = response.get_uri() or entry["url"]  # after redirects: where the bytes come from
+            entry["total"] = response.get_content_length()
+            headers = response.get_http_headers()
+            if headers is not None:
+                # If-Range: the server sends the rest only if the file is unchanged, else all of it
+                validator = headers.get_one("ETag") or headers.get_one("Last-Modified")
+                if validator and not validator.startswith("W/"):
+                    entry["if_range"] = validator
+        req_headers = req.get_http_headers() if req else None
+        if req_headers is not None and req_headers.get_one("Referer"):
+            entry["referer"] = req_headers.get_one("Referer")
         self.statusbar.push(self.context_id, f"📥 Download Started: {entry['filename']} -> {downloads_dir}")
         return True
 
@@ -4990,90 +5541,318 @@ class ArrowBrowserWindow(Gtk.Window):
         # A connection that drops part-way also ends in "finished", with no "failed".
         response = download.get_response() if download is not None else None
         expected = response.get_content_length() if response is not None else 0
+        if download is not None:
+            entry["received"] = download.get_received_data_length()
+            entry["total"] = expected or entry["received"]
         if expected and download.get_received_data_length() < expected:
+            # WebKit leaves the cut-off file under the real name: move it aside so it doesn't
+            # pass for the whole file, and keep it for Resume.
+            path = entry.get("path")
+            if path and os.path.exists(path):
+                try:
+                    os.replace(path, path + DOWNLOAD_PART_SUFFIX)
+                except OSError as e:
+                    print("Download note:", e)
             self.on_download_failed(entry, "the connection closed before the whole file arrived")
             return
         entry["status"] = "Completed ✅"
+        entry["download"] = None
         self.statusbar.push(self.context_id, f"✅ Download Completed: {entry['filename']}")
+        self._refresh_downloads_window()
 
     def on_download_failed(self, entry, error):
-        if entry["status"] == "Cancelled":
-            return  # we cancelled it ourselves; WebKit reports that as a failure
+        if entry["status"] in ("Cancelled", "Paused"):
+            return  # we stopped it ourselves; WebKit reports that as a failure
         entry["status"] = "Failed ❌"
-        self.statusbar.push(self.context_id, f"❌ Download Failed: {entry['filename']} ({getattr(error, 'message', error)})")
+        entry["error"] = str(getattr(error, "message", error))
+        entry["download"] = None
+        self.statusbar.push(self.context_id, f"❌ Download Failed: {entry['filename']} ({entry['error']})")
+        self._refresh_downloads_window()
+
+    # --- pause / resume / cancel ------------------------------------------
+    def pause_download(self, entry):
+        """Stop a download but keep what has arrived, so resume_download() can fetch the rest."""
+        if entry["status"] != "Downloading..." or not entry.get("resumable") or not entry.get("path"):
+            return False
+        job, download = entry.get("job"), entry.get("download")
+        if job is not None:
+            job.stop()  # its thread stops at the next chunk and reports "paused"
+            entry["status"], entry["speed"] = "Paused", 0
+            self._refresh_downloads_window()
+            return True
+        if download is None:
+            return False
+        working = entry["path"] + ".wkdownload"
+        try:
+            entry["received"] = keep_partial_download(working, entry["path"] + DOWNLOAD_PART_SUFFIX)
+        except OSError as e:
+            print("Pause note:", e)
+            return False
+        entry["status"] = "Paused"
+        entry["speed"] = 0
+        download.cancel()  # WebKit deletes its own copy; the .part stays
+        entry["download"] = None
+        self._refresh_downloads_window()
+        return True
+
+    def resume_download(self, entry):
+        """Continue a paused or failed download from its .part file (or from the start)."""
+        if entry["status"] not in ("Paused", "Failed ❌") or not entry.get("resumable") or not entry.get("path"):
+            return False
+        if entry.get("job") is not None:
+            return False  # the paused job's thread hasn't stopped yet; two writers would mix up the file
+        if not entry.get("url", "").startswith(("http://", "https://")):
+            return False
+        entry["status"], entry["error"], entry["note"], entry["speed"] = "Downloading...", "", "", 0
+        self._refresh_downloads_window()
+        url = entry["url"]
+        context = entry.get("context") or self.context
+        cookie_manager = context.get_website_data_manager().get_cookie_manager()
+
+        def got_cookies(manager, result):
+            try:
+                cookies = manager.get_cookies_finish(result) or []
+            except GLib.Error:
+                cookies = []
+            headers = {"User-Agent": self.web_settings.get_user_agent() or USER_AGENT,
+                       "Accept-Encoding": "identity"}  # byte ranges only make sense on the file itself
+            if cookies:
+                headers["Cookie"] = "; ".join(f"{c.get_name()}={c.get_value()}" for c in cookies)
+            if entry.get("if_range"):
+                headers["If-Range"] = entry["if_range"]
+            if entry.get("referer"):
+                headers["Referer"] = entry["referer"]
+            if entry["status"] != "Downloading...":
+                return  # cancelled while the cookies were being looked up
+
+            def progress(received, total):
+                entry["received"], entry["total"] = received, total or entry["total"]
+
+            job = ResumeJob(url, entry["path"] + DOWNLOAD_PART_SUFFIX, headers, progress,
+                            lambda outcome, detail: self._on_resume_end(entry, job, outcome, detail))
+            entry["job"] = job
+            job.start()
+
+        cookie_manager.get_cookies(url, None, got_cookies)
+        return True
+
+    def _on_resume_end(self, entry, job, outcome, detail):
+        if entry.get("job") is not job:
+            return
+        entry["job"], entry["speed"] = None, 0
+        entry["note"] = job.note
+        part = entry["path"] + DOWNLOAD_PART_SUFFIX
+        if entry["status"] == "Cancelled":
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+        elif outcome == "paused":
+            entry["status"] = "Paused"
+        elif outcome == "failed":
+            entry["status"], entry["error"] = "Failed ❌", detail or "unknown error"
+            self.statusbar.push(self.context_id, f"❌ Download Failed: {entry['filename']} ({entry['error']})")
+        else:
+            target = entry["path"]
+            if os.path.exists(target):  # something took the name meanwhile; never overwrite it
+                target = self.unique_download_path(os.path.dirname(target), os.path.basename(target))
+            try:
+                os.replace(part, target)
+                entry["path"], entry["filename"] = target, os.path.basename(target)
+                entry["status"] = "Completed ✅"
+                entry["total"] = entry["received"] = os.path.getsize(target)
+                self.statusbar.push(self.context_id, f"✅ Download Completed: {entry['filename']}")
+            except OSError as e:
+                entry["status"], entry["error"] = "Failed ❌", str(e)
+        self._refresh_downloads_window()
+
+    def cancel_download(self, entry):
+        status = entry["status"]
+        if status not in ("Downloading...", "Paused"):
+            return False
+        entry["status"], entry["speed"] = "Cancelled", 0
+        job, download = entry.get("job"), entry.get("download")
+        if job is not None:
+            job.stop()  # _on_resume_end removes the .part
+        elif download is not None:
+            download.cancel()
+            entry["download"] = None
+        if job is None and entry.get("path"):
+            try:
+                os.remove(entry["path"] + DOWNLOAD_PART_SUFFIX)
+            except OSError:
+                pass
+        self.statusbar.push(self.context_id, f"🛑 Download cancelled: {entry['filename']}")
+        self._refresh_downloads_window()
+        return True
 
     def on_downloads_clicked(self, btn):
-        dialog = Gtk.Dialog(
-            title="📥 Downloads Manager",
-            transient_for=self,
-            modal=True,
-            destroy_with_parent=True
-        )
+        """The Downloads window: live progress, with Pause / Resume / Cancel / Open for each download.
+        It doesn't block the browser, and opening it again brings the open one forward."""
+        existing = getattr(self, "_downloads_window", None)
+        if existing is not None:
+            existing.present()
+            return existing
+        dialog = Gtk.Dialog(title="Downloads", transient_for=self, modal=False, destroy_with_parent=True)
         dialog.get_style_context().add_class("arrow-dialog")
-        self.apply_dark_titlebar(dialog, "📥 Downloads Manager")
-        dialog.add_button("Close", Gtk.ResponseType.CLOSE)
-        dialog.set_default_size(520, 400)
+        self.apply_dark_titlebar(dialog, "📥 Downloads")
+        close_btn = dialog.add_button("Close", Gtk.ResponseType.CLOSE)
+        close_btn.get_style_context().add_class("settings-primary-btn")
+        dialog.set_default_size(620, 480)
+        area = dialog.get_content_area()
+        for setter in (area.set_margin_start, area.set_margin_end, area.set_margin_top, area.set_margin_bottom):
+            setter(16)
+        area.set_spacing(10)
 
-        content_area = dialog.get_content_area()
-        content_area.set_margin_start(16)
-        content_area.set_margin_end(16)
-        content_area.set_margin_top(16)
-        content_area.set_margin_bottom(16)
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_vexpand(True)
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        card.get_style_context().add_class("settings-card")
+        scroller.add(card)
+        area.pack_start(scroller, True, True, 0)
 
-        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        content_area.add(vbox)
+        def button(label, fn, style="settings-action-btn"):
+            b = Gtk.Button(label=label)
+            b.get_style_context().add_class(style)
+            b.set_valign(Gtk.Align.CENTER)
+            b.connect("clicked", lambda _b: fn())
+            return b
 
-        lbl_header = Gtk.Label(label="📥 Recent Downloads")
-        lbl_header.get_style_context().add_class("brand-label")
-        vbox.pack_start(lbl_header, False, False, 0)
+        def open_file(entry):
+            try:
+                Gio.AppInfo.launch_default_for_uri(GLib.filename_to_uri(entry["path"]), None)
+            except GLib.Error as e:
+                self.statusbar.push(self.context_id, f"Couldn't open {entry['filename']}: {e.message}")
 
-        if not self.downloads_history:
-            lbl_empty = Gtk.Label(label="No downloads in this session yet.")
-            vbox.pack_start(lbl_empty, False, False, 12)
-        else:
-            for item in self.downloads_history[-8:]:
-                hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-                name_lbl = Gtk.Label(label=f"📄 {item['filename']} [{item['status']}]")
-                hbox.pack_start(name_lbl, True, True, 0)
-                vbox.pack_start(hbox, False, False, 2)
+        def show_folder(folder):
+            try:
+                Gio.AppInfo.launch_default_for_uri(GLib.filename_to_uri(folder), None)
+            except GLib.Error as e:
+                self.statusbar.push(self.context_id, f"Couldn't open {folder}: {e.message}")
 
-        lbl_folder_title = Gtk.Label(label="Save downloads to:", xalign=0.0)
-        vbox.pack_start(lbl_folder_title, False, False, 0)
-        folder_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        lbl_folder = Gtk.Label(label=self.get_downloads_dir(), xalign=0.0)
-        lbl_folder.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
-        lbl_folder.set_selectable(True)
-        folder_row.pack_start(lbl_folder, True, True, 0)
-        btn_change_folder = Gtk.Button(label="Change…")
-        btn_reset_folder = Gtk.Button(label="Reset")
-        folder_row.pack_start(btn_change_folder, False, False, 0)
-        folder_row.pack_start(btn_reset_folder, False, False, 0)
-        vbox.pack_start(folder_row, False, False, 0)
+        rows = []  # (entry, status label, progress bar)
+
+        def controls_for(entry):
+            status = entry["status"]
+            if status == "Downloading...":
+                out = []
+                if entry.get("resumable") and entry.get("path"):
+                    out.append(button("⏸ Pause", lambda: self.pause_download(entry)))
+                return out + [button("✕ Cancel", lambda: self.cancel_download(entry), "settings-danger-btn")]
+            if status == "Paused":
+                return [button("▶ Resume", lambda: self.resume_download(entry), "settings-primary-btn"),
+                        button("✕ Cancel", lambda: self.cancel_download(entry), "settings-danger-btn")]
+            if status == "Failed ❌" and entry.get("resumable") and entry.get("path"):
+                part = entry["path"] + DOWNLOAD_PART_SUFFIX
+                return [button("▶ Resume" if os.path.exists(part) else "↻ Retry",
+                               lambda: self.resume_download(entry), "settings-primary-btn")]
+            if status == "Completed ✅" and entry.get("path") and os.path.exists(entry["path"]):
+                out = [button("📁 Show", lambda: show_folder(os.path.dirname(entry["path"])))]
+                if not is_risky_download(entry["filename"]):
+                    out.insert(0, button("Open", lambda: open_file(entry)))
+                return out
+            return []
+
+        def rebuild():
+            for child in card.get_children():
+                child.destroy()
+            rows.clear()
+            entries = list(reversed(self.downloads_history))
+            if not entries:
+                empty = Gtk.Label(label="No downloads in this session yet.", xalign=0.0)
+                empty.get_style_context().add_class("settings-hint-label")
+                empty.set_margin_top(14)
+                empty.set_margin_bottom(14)
+                card.pack_start(empty, False, False, 0)
+            for i, entry in enumerate(entries):
+                if i:
+                    card.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 0)
+                icon = {"Completed ✅": "✅", "Failed ❌": "⚠️", "Cancelled": "🚫", "Paused": "⏸"}.get(entry["status"], "📥")
+                row = self._settings_row(icon, entry["filename"] or "download", download_status_text(entry),
+                                         *controls_for(entry))
+                row._arrow_subtitle.set_line_wrap(False)
+                row._arrow_subtitle.set_ellipsize(Pango.EllipsizeMode.END)
+                bar = None
+                if entry["status"] in ("Downloading...", "Paused"):
+                    bar = Gtk.ProgressBar()
+                    bar.set_margin_top(4)
+                    row._arrow_subtitle.get_parent().pack_start(bar, False, False, 0)
+                card.pack_start(row, False, False, 0)
+                rows.append((entry, row._arrow_subtitle, bar))
+            dialog._arrow_signature = [(id(e), e["status"]) for e in self.downloads_history]
+            card.show_all()
+            tick()
+
+        def tick():
+            now = time.monotonic()
+            for entry, label, bar in rows:
+                if entry["status"] == "Downloading...":
+                    last = entry.get("_rate")
+                    if last and now - last[0] >= 0.4:
+                        instant = max(0, entry["received"] - last[1]) / (now - last[0])
+                        entry["speed"] = instant if not entry.get("speed") else 0.6 * entry["speed"] + 0.4 * instant
+                    if not last or now - last[0] >= 0.4:
+                        entry["_rate"] = (now, entry["received"])
+                else:
+                    entry.pop("_rate", None)
+                label.set_text(download_status_text(entry))
+                if bar is not None:
+                    if entry.get("total"):
+                        bar.set_fraction(min(1.0, entry["received"] / entry["total"]))
+                    elif entry["status"] == "Downloading...":
+                        bar.pulse()
+            return True
+
+        clear_btn = button("Clear finished", lambda: (
+            self.downloads_history.__setitem__(slice(None), [
+                e for e in self.downloads_history if e["status"] in ("Downloading...", "Paused")]), rebuild()))
+
+        folder_row = self._settings_row("📁", "Save downloads to", self.get_downloads_dir())
+        folder_row._arrow_subtitle.set_line_wrap(False)
+        folder_row._arrow_subtitle.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        btn_open_folder = button("Open", lambda: show_folder(self.get_downloads_dir()))
+        btn_change_folder = button("Change…", lambda: (self.choose_download_folder(dialog), refresh_folder_label()))
+        btn_reset_folder = button("Reset", lambda: (setattr(self, "download_dir", ""), self.save_settings(),
+                                                    refresh_folder_label()))
+        btn_reset_folder.set_tooltip_text("Use your system's Downloads folder")
+        for b in (btn_reset_folder, btn_change_folder, btn_open_folder):
+            folder_row.pack_end(b, False, False, 0)
 
         def refresh_folder_label():
-            lbl_folder.set_text(self.get_downloads_dir())
+            folder_row._arrow_subtitle.set_text(self.get_downloads_dir())
             btn_reset_folder.set_sensitive(bool(self.download_dir))
 
-        def on_change_folder(_btn):
-            self.choose_download_folder(dialog)
-            refresh_folder_label()
+        refresh_folder_label()
+        clear_btn.set_halign(Gtk.Align.END)
+        area.pack_start(clear_btn, False, False, 0)
+        folder_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        folder_card.get_style_context().add_class("settings-card")
+        folder_card.pack_start(folder_row, False, False, 0)
+        area.pack_start(folder_card, False, False, 0)
 
-        def on_reset_folder(_btn):
-            self.download_dir = ""
-            self.save_settings()
-            refresh_folder_label()
+        dialog._arrow_rebuild = rebuild
+        dialog._arrow_rows = rows
+        timer = GLib.timeout_add(500, tick)
 
-        btn_change_folder.connect("clicked", on_change_folder)
-        btn_reset_folder.connect("clicked", on_reset_folder)
-        btn_reset_folder.set_sensitive(bool(self.download_dir))
+        def on_destroy(_dialog):
+            GLib.source_remove(timer)
+            if getattr(self, "_downloads_window", None) is dialog:
+                self._downloads_window = None
 
-        btn_open_folder = Gtk.Button(label="📁 Open Downloads Folder")
-        btn_open_folder.connect("clicked", lambda b: subprocess.Popen(["xdg-open", self.get_downloads_dir()]))
-        vbox.pack_start(btn_open_folder, False, False, 8)
-
+        dialog.connect("destroy", on_destroy)
+        dialog.connect("response", lambda d, _r: d.destroy())
+        self._downloads_window = dialog
+        rebuild()
         dialog.show_all()
-        dialog.run()
-        dialog.destroy()
+        return dialog
+
+    def _refresh_downloads_window(self):
+        """Redraw the Downloads window's list when a download starts, stops or changes state."""
+        dialog = getattr(self, "_downloads_window", None)
+        if dialog is not None and getattr(dialog, "_arrow_signature", None) != [
+                (id(e), e["status"]) for e in self.downloads_history]:
+            dialog._arrow_rebuild()
 
     def start_auto_git_update_check(self):
         threading.Thread(target=self.async_git_update_check, daemon=True).start()
@@ -5296,6 +6075,12 @@ class ArrowBrowserWindow(Gtk.Window):
             self._count_event("params")
         return new_uri
 
+    def search_engine_templates(self):
+        """Every engine the default search can be set to: built-in ones, then the user's own."""
+        engines = dict(SEARCH_ENGINES)
+        engines.update((e["name"], e["url"]) for e in self.custom_search_engines)
+        return engines
+
     def on_url_activate(self, entry):
         text = entry.get_text().strip()
         if not text:
@@ -5310,8 +6095,9 @@ class ArrowBrowserWindow(Gtk.Window):
                 scheme = "http://" if is_local_network_host(host_candidate) else "https://"
                 text = scheme + text
             else:
-                template = SEARCH_ENGINES.get(self.search_engine, SEARCH_ENGINES[DEFAULT_SEARCH_ENGINE])
-                text = template.format(query=urllib.parse.quote(text))
+                text = (resolve_search_shortcut(text, self.custom_search_engines)
+                        or search_url(self.search_engine_templates().get(self.search_engine,
+                                                                         SEARCH_ENGINES[DEFAULT_SEARCH_ENGINE]), text))
 
         webview = self.get_active_webview()
         if webview:
@@ -5702,14 +6488,22 @@ class ArrowBrowserWindow(Gtk.Window):
             # document this webview loads.
 
     def save_settings(self):
-        save_persistent_settings({
+        save_persistent_settings(self._settings_snapshot())
+
+    # settings.json keys whose attribute has another name
+    _SETTING_ATTRS = {"dark_mode": "dark_mode_active"}
+
+    def _settings_snapshot(self):
+        return ({
             "dark_mode": self.dark_mode_active,
+            "ui_theme": self.ui_theme,
             "adblock_enabled": self.adblock_enabled,
             "clearurls_enabled": self.clearurls_enabled,
             "https_enabled": self.https_enabled,
             "dev_tools_enabled": self.dev_tools_enabled,
             "webrtc_enabled": self.webrtc_enabled,
             "search_engine": self.search_engine,
+            "custom_search_engines": self.custom_search_engines,
             "homepage": self.homepage,
             "open_homepage_on_startup": self.open_homepage_on_startup,
             "first_run_greeted": self.first_run_greeted,
@@ -5728,6 +6522,14 @@ class ArrowBrowserWindow(Gtk.Window):
             "bedtime_start": self.bedtime_start,
             "bedtime_end": self.bedtime_end,
         })
+
+    def set_ui_theme(self, theme):
+        """The browser's own look: "dark" or "light" (Settings → General)."""
+        if theme not in UI_THEMES:
+            return
+        self.ui_theme = theme
+        apply_ui_theme(theme)
+        self.save_settings()
 
     def set_dark_mode(self, active):
         """Turn dark mode for websites on or off (Settings → General)."""
@@ -6344,12 +7146,29 @@ class ArrowBrowserWindow(Gtk.Window):
         )
 
         search_combo = Gtk.ComboBoxText()
-        for engine_name in SEARCH_ENGINES:
-            search_combo.append_text(engine_name)
-        search_combo.set_active(list(SEARCH_ENGINES.keys()).index(self.search_engine))
-        search_combo.connect("changed", lambda cb: (setattr(self, 'search_engine', cb.get_active_text()), self.save_settings(),
-                                                    self.url_entry.set_placeholder_text(f"Search {self.search_engine} or enter URL...")))
+
+        def fill_search_combo():
+            search_combo._arrow_filling = True
+            search_combo.remove_all()
+            names = list(self.search_engine_templates())
+            for engine_name in names:
+                search_combo.append_text(engine_name)
+            search_combo.set_active(names.index(self.search_engine))
+            search_combo._arrow_filling = False
+
+        def on_search_engine_changed(cb):
+            if getattr(cb, "_arrow_filling", False) or cb.get_active_text() is None:
+                return
+            self.set_search_engine(cb.get_active_text())
+
+        fill_search_combo()
+        search_combo.connect("changed", on_search_engine_changed)
         controls["search_engine"] = search_combo
+        shortcuts_row = self._settings_button_row(
+            "⌨️", "Search shortcuts",
+            "Type a shortcut, a space and your search in the address bar: \"w taj mahal\" searches Wikipedia. "
+            "You can add your own search engines here too.",
+            "Manage…", lambda: (self.open_search_shortcuts(dialog), fill_search_combo()))
 
         btn_change_folder = Gtk.Button(label="Change…")
         btn_change_folder.get_style_context().add_class("settings-action-btn")
@@ -6378,11 +7197,29 @@ class ArrowBrowserWindow(Gtk.Window):
             gen, "SEARCH & DOWNLOADS",
             self._settings_row("🔍", "Search engine", "Used when what you type in the address bar isn't an address.",
                                search_combo),
+            shortcuts_row,
             folder_row,
         )
 
+        theme_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        theme_box.get_style_context().add_class("theme-choice")
+        theme_buttons = {}
+        group = None
+        for theme, label in (("dark", "🌙 Dark"), ("light", "☀️ Light")):
+            btn = Gtk.RadioButton.new_with_label_from_widget(group, label)
+            btn.set_mode(False)  # drawn as a button, not a round radio dot
+            group = group or btn
+            theme_buttons[theme] = btn
+            theme_box.pack_start(btn, False, False, 0)
+        theme_buttons[self.ui_theme].set_active(True)
+        for theme, btn in theme_buttons.items():
+            btn.connect("toggled", lambda b, t=theme: b.get_active() and self.set_ui_theme(t))
+        controls["ui_theme"] = theme_buttons
         self._settings_section(
             gen, "APPEARANCE & READING",
+            self._settings_row("🎨", "Browser theme",
+                               "How the toolbar, tabs, menus and Settings look. Websites keep their own colours "
+                               "unless Dark mode for websites is on.", theme_box),
             switch("dark_mode_active", "🌙", "Dark mode for websites",
                    "Recolours bright pages dark and leaves sites that are already dark alone.",
                    self.set_dark_mode),
@@ -6461,7 +7298,8 @@ class ArrowBrowserWindow(Gtk.Window):
 
         # --- History & Data ---------------------------------------------------
         data = add_page("data", "🗂️  History & Data", "History & Data",
-                        "Your browsing history, cookies and cached files, and bringing data in from another browser.")
+                        "Your browsing history, cookies and cached files, bringing data in from another browser, "
+                        "and backups.")
 
         def _store_clear_on_exit(active):
             store("clear_history_on_exit")(active)
@@ -6516,7 +7354,29 @@ class ArrowBrowserWindow(Gtk.Window):
             "or from an exported bookmarks .html file.",
             "Import…", lambda: self.open_import_dialog(dialog))
         import_row._arrow_button.set_sensitive(not self.is_private)
-        self._settings_section(data, "IMPORT", import_row)
+        export_row = self._settings_button_row(
+            "📤", "Export bookmarks",
+            "Saves them as an .html file that Firefox, Chrome and other browsers can import.",
+            "Export…", lambda: self.export_bookmarks_interactive(dialog, export_row._arrow_subtitle))
+        backup_row = self._settings_button_row(
+            "💾", "Back up settings and bookmarks",
+            "One file with your settings, search engines, bookmarks and site settings, for a new computer or "
+            "a fresh install. Saved passwords and history are not included.",
+            "Back up…", lambda: self.backup_interactive(dialog, backup_row._arrow_subtitle))
+        restart_after_restore = Gtk.Button(label="🚀 Restart now")
+        restart_after_restore.get_style_context().add_class("settings-primary-btn")
+        restart_after_restore.set_no_show_all(True)
+        restart_after_restore.connect("clicked", lambda b: close_then(self.restart_application))
+        restore_row = self._settings_button_row(
+            "♻️", "Restore from a backup",
+            "Brings back a backup made with the button above.",
+            "Restore…", lambda: self.restore_interactive(dialog, restore_row._arrow_subtitle,
+                                                         restart_after_restore.show))
+        restore_row.pack_end(restart_after_restore, False, False, 0)
+        restart_after_restore.set_valign(Gtk.Align.CENTER)
+        for row in (export_row, backup_row, restore_row):
+            row._arrow_button.set_sensitive(not self.is_private)
+        self._settings_section(data, "IMPORT, EXPORT & BACKUP", import_row, export_row, backup_row, restore_row)
 
         # --- Performance ------------------------------------------------------
         perf = add_page("performance", "⚡  Performance", "Performance",
@@ -6574,7 +7434,18 @@ class ArrowBrowserWindow(Gtk.Window):
             "🌐", "Project page on GitHub",
             "Source code, release notes, downloads and bug reports: " + PROJECT_PAGE_URL.split("://", 1)[1],
             "Open", lambda: close_then(lambda: self.create_new_tab(PROJECT_PAGE_URL)))
-        self._settings_section(about, "VERSION", hero, project_row)
+        engine = webkit_version()
+        engine_outdated, engine_hint = webkit_version_note(engine)
+        engine_controls = ()
+        if engine_outdated:
+            engine_chip = Gtk.Label(label="⚠️ Outdated")
+            engine_chip.get_style_context().add_class("settings-chip")
+            engine_chip.get_style_context().add_class("settings-chip-amber")
+            engine_controls = (engine_chip,)
+        engine_row = self._settings_row(
+            "🧩", "Web engine: WebKitGTK " + ".".join(map(str, engine)), engine_hint, *engine_controls)
+        engine_row._arrow_outdated = engine_outdated
+        self._settings_section(about, "VERSION", hero, engine_row, project_row)
 
         update_row = self._settings_button_row(
             "🔄", "Check for updates",
@@ -6898,6 +7769,22 @@ td.c{{text-align:right;color:#cbd5e1;width:70px}}td.b{{width:30%}}td.b span{{dis
         entry = self._closed_tabs.pop()
         self.create_new_tab(entry["url"])
 
+    def toggle_tab_muted(self, tab_box):
+        webview = tab_box._arrow_webview
+        webview.set_is_muted(not webview.get_is_muted())
+        self._update_tab_audio(tab_box)
+
+    def _update_tab_audio(self, tab_box):
+        """Show 🔊 on a tab that is playing sound and 🔇 on a muted one; hide it otherwise."""
+        webview = getattr(tab_box, "_arrow_webview", None)
+        button = getattr(tab_box, "_arrow_audio_btn", None)
+        if webview is None or button is None:
+            return
+        muted = webview.get_is_muted()
+        button.set_label("🔇" if muted else "🔊")
+        button.set_tooltip_text("Unmute tab" if muted else "Mute tab")
+        button.set_visible(muted or webview.is_playing_audio())
+
     def set_tab_pinned(self, tab_box, pinned):
         if bool(getattr(tab_box, "_arrow_pinned", False)) == bool(pinned):
             return
@@ -7127,6 +8014,8 @@ td.c{{text-align:right;color:#cbd5e1;width:70px}}td.b{{width:30%}}td.b span{{dis
             ("Reload", lambda: tab_box._arrow_webview.reload()),
             ("Duplicate Tab", lambda: self.duplicate_tab(tab_box)),
             ("Unpin Tab" if pinned else "Pin Tab", lambda: self.set_tab_pinned(tab_box, not pinned)),
+            ("Unmute Tab" if tab_box._arrow_webview.get_is_muted() else "Mute Tab",
+             lambda: self.toggle_tab_muted(tab_box)),
             None,
             ("Close Tab", lambda: self.close_tab(tab_box)),
             ("Close Other Tabs", lambda: self.close_other_tabs(tab_box)),
@@ -7371,6 +8260,140 @@ td.c{{text-align:right;color:#cbd5e1;width:70px}}td.b{{width:30%}}td.b span{{dis
             self._refill_autocomplete()
         self.update_bookmark_star((self.get_active_webview().get_uri() or "") if self.get_active_webview() else "")
         return added_b, added_h
+
+    # ------------------------------------------------------------------
+    # Export and backup (Settings → History & Data)
+    # ------------------------------------------------------------------
+    def export_bookmarks_to(self, path):
+        """Write the bookmarks as an HTML file other browsers import. Returns how many."""
+        text = export_netscape_bookmarks(self.bookmarks)
+        fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        return sum(1 for b in self.bookmarks if _is_web_url(b.get("url")))
+
+    def write_backup_to(self, path):
+        _write_json_private(path, build_backup(self._settings_snapshot(), self.bookmarks, self.site_settings))
+
+    def read_backup_file(self, path):
+        with open(path, "rb") as f:
+            return read_backup(f.read(BACKUP_MAX_BYTES + 1))
+
+    def apply_backup(self, backup):
+        """Restore a backup from read_backup(): settings are replaced (except this computer's own),
+        bookmarks and site settings are added to what is here. Most settings take effect after a restart.
+        Returns (settings_restored, bookmarks_added, sites_restored)."""
+        current = self._settings_snapshot()
+        restored = 0
+        for key, value in backup["settings"].items():
+            if key not in current or key in BACKUP_MACHINE_SETTINGS:
+                continue
+            if key == "custom_search_engines":
+                value = clean_custom_search_engines(value)
+            elif key == "homepage":
+                value = sanitize_homepage_url(value) if isinstance(value, str) else None
+            elif key == "ui_theme":
+                value = value if value in UI_THEMES else None
+            elif key == "break_interval_minutes":
+                value = self._clamp_int(value, current[key], 10, 180)
+            elif type(value) is not type(current[key]):
+                continue
+            if value is None:
+                continue
+            setattr(self, self._SETTING_ATTRS.get(key, key), value)
+            restored += 1
+        if self.search_engine not in self.search_engine_templates():
+            self.search_engine = DEFAULT_SEARCH_ENGINE
+        apply_ui_theme(self.ui_theme)
+        if self.clear_history_on_exit:
+            mark_clear_on_exit_pending()
+        else:
+            unmark_clear_on_exit_pending()
+        self.save_settings()
+        self.url_entry.set_placeholder_text(f"Search {self.search_engine} or enter URL...")
+        for host, entry in backup["site_settings"].items():
+            self.site_settings[host] = {**self.site_settings.get(host, {}), **entry}
+        if backup["site_settings"]:
+            self._save_site_settings()
+        added_b, _ = self._apply_import(backup["bookmarks"], [])
+        return restored, added_b, len(backup["site_settings"])
+
+    def _choose_file(self, parent, title, save_name=None, pattern=None):
+        """A file chooser; save_name makes it a Save dialog suggesting that name. Returns a path or None."""
+        chooser = Gtk.FileChooserDialog(
+            title=title, transient_for=parent or self,
+            action=Gtk.FileChooserAction.SAVE if save_name else Gtk.FileChooserAction.OPEN)
+        chooser.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Save" if save_name else "Open", Gtk.ResponseType.OK)
+        chooser.get_style_context().add_class("arrow-dialog")
+        if save_name:
+            chooser.set_do_overwrite_confirmation(True)
+            chooser.set_current_folder(self.get_downloads_dir())
+            chooser.set_current_name(save_name)
+        if pattern:
+            file_filter = Gtk.FileFilter()
+            file_filter.set_name(pattern)
+            file_filter.add_pattern(pattern)
+            chooser.add_filter(file_filter)
+        path = chooser.get_filename() if chooser.run() == Gtk.ResponseType.OK else None
+        chooser.destroy()
+        return path
+
+    def export_bookmarks_interactive(self, parent, status_label):
+        path = self._choose_file(parent, "Export bookmarks", time.strftime("arrow-bookmarks-%Y-%m-%d.html"))
+        if not path:
+            return
+        try:
+            count = self.export_bookmarks_to(path)
+            status_label.set_text(f"✅ Exported {count} bookmarks to {os.path.basename(path)}. "
+                                  "Firefox, Chrome and others can import this file.")
+        except OSError as e:
+            status_label.set_text(f"❌ Couldn't save the file: {e}")
+
+    def backup_interactive(self, parent, status_label):
+        path = self._choose_file(parent, "Back up Arrow", time.strftime("arrow-backup-%Y-%m-%d.json"))
+        if not path:
+            return
+        try:
+            self.write_backup_to(path)
+            status_label.set_text(f"✅ Saved {os.path.basename(path)}: settings, {len(self.bookmarks)} bookmarks and "
+                                  f"settings for {len(self.site_settings)} sites. Saved passwords aren't included.")
+        except OSError as e:
+            status_label.set_text(f"❌ Couldn't save the backup: {e}")
+
+    def restore_interactive(self, parent, status_label, on_restored=None):
+        path = self._choose_file(parent, "Restore a backup", pattern="*.json")
+        if not path:
+            return
+        try:
+            backup = self.read_backup_file(path)
+        except (OSError, ValueError) as e:
+            status_label.set_text(f"❌ Couldn't restore {os.path.basename(path)}: {e}.")
+            return
+        allowed = sorted(h for h, e in backup["site_settings"].items() if "allow" in e.get("permissions", {}).values())
+        confirm = Gtk.MessageDialog(transient_for=parent or self, modal=True, destroy_with_parent=True,
+                                    message_type=Gtk.MessageType.QUESTION, buttons=Gtk.ButtonsType.NONE,
+                                    text="Restore this backup?")
+        confirm.get_style_context().add_class("arrow-dialog")
+        detail = (f"Your settings will be replaced by the ones in the backup, and its {len(backup['bookmarks'])} "
+                  f"bookmarks and settings for {len(backup['site_settings'])} sites will be added.")
+        if allowed:
+            shown = ", ".join(allowed[:5]) + (f" and {len(allowed) - 5} more" if len(allowed) > 5 else "")
+            detail += f"\n\nIt allows camera, microphone, location or notifications for: {shown}."
+        detail += "\n\nOnly restore a backup you made yourself."
+        confirm.format_secondary_text(detail)
+        confirm.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        restore_btn = confirm.add_button("Restore", Gtk.ResponseType.ACCEPT)
+        restore_btn.get_style_context().add_class("settings-primary-btn")
+        confirm.set_default_response(Gtk.ResponseType.CANCEL)
+        response = confirm.run()
+        confirm.destroy()
+        if response != Gtk.ResponseType.ACCEPT:
+            return
+        restored, added_b, sites = self.apply_backup(backup)
+        status_label.set_text(f"✅ Restored {restored} settings, {added_b} new bookmarks and settings for {sites} sites. "
+                              "Restart Arrow so every setting takes effect.")
+        if on_restored:
+            on_restored()
 
     def open_import_dialog(self, parent=None):
         if self.is_private:
@@ -7644,6 +8667,121 @@ td.c{{text-align:right;color:#cbd5e1;width:70px}}td.b{{width:30%}}td.b span{{dis
         if entry.get("passwords") is False:
             parts.append("no password prompts")
         return ", ".join(parts) or "default settings"
+
+    def set_search_engine(self, name):
+        if name not in self.search_engine_templates():
+            return
+        self.search_engine = name
+        self.save_settings()
+        self.url_entry.set_placeholder_text(f"Search {self.search_engine} or enter URL...")
+
+    def add_custom_search_engine(self, name, keyword, url):
+        """Add one of the user's own search engines. Returns an error message, or None when added."""
+        name, keyword = (name or "").strip(), (keyword or "").strip().lower()
+        if not name:
+            return "Give it a name."
+        if " " in keyword:
+            return "A shortcut can't contain spaces."
+        if not normalize_search_template(url):
+            return "The address must start with https:// and contain %s once, where the search goes."
+        if name.lower() in {n.lower() for n in self.search_engine_templates()}:
+            return f"There is already a search engine called {name}."
+        if keyword and keyword in {k for k, _n, _u in SEARCH_SHORTCUTS} | {e["keyword"] for e in self.custom_search_engines}:
+            return f"The shortcut \"{keyword}\" is already used."
+        if len(self.custom_search_engines) >= MAX_CUSTOM_SEARCH_ENGINES:
+            return f"You can add up to {MAX_CUSTOM_SEARCH_ENGINES} search engines."
+        self.custom_search_engines = clean_custom_search_engines(
+            self.custom_search_engines + [{"name": name, "keyword": keyword, "url": url}])
+        self.save_settings()
+        return None
+
+    def remove_custom_search_engine(self, name):
+        self.custom_search_engines = [e for e in self.custom_search_engines if e["name"] != name]
+        if self.search_engine == name:
+            self.search_engine = DEFAULT_SEARCH_ENGINE
+            self.url_entry.set_placeholder_text(f"Search {self.search_engine} or enter URL...")
+        self.save_settings()
+
+    def open_search_shortcuts(self, parent=None):
+        dialog, area = self._make_dialog("Search shortcuts", parent, 620, 600)
+        area.pack_start(self._hint("In the address bar, type a shortcut, a space and what you're looking for. "
+                                   "For example \"yt lofi music\" searches YouTube and \"w taj mahal\" searches Wikipedia."),
+                        False, False, 0)
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_vexpand(True)
+        listbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        scroller.add(listbox)
+        area.pack_start(scroller, True, True, 0)
+
+        def add_line(keyword, name, url, removable):
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            row.set_margin_top(2)
+            row.set_margin_bottom(2)
+            key_lbl = Gtk.Label(label=keyword or "—")
+            key_lbl.get_style_context().add_class("settings-chip")
+            key_lbl.set_size_request(52, -1)
+            key_lbl.set_valign(Gtk.Align.CENTER)
+            row.pack_start(key_lbl, False, False, 0)
+            text = self._settings_text(name, url.replace("{query}", "%s"))
+            text._arrow_subtitle.set_line_wrap(False)
+            text._arrow_subtitle.set_ellipsize(Pango.EllipsizeMode.END)
+            row.pack_start(text, True, True, 0)
+            if removable:
+                btn = Gtk.Button(label="Remove")
+                btn.get_style_context().add_class("settings-action-btn")
+                btn.set_valign(Gtk.Align.CENTER)
+                btn.connect("clicked", lambda _b: (self.remove_custom_search_engine(name), refresh()))
+                row.pack_end(btn, False, False, 0)
+            listbox.pack_start(row, False, False, 0)
+
+        def refresh():
+            for child in listbox.get_children():
+                child.destroy()
+            for entry in self.custom_search_engines:
+                add_line(entry["keyword"], entry["name"], entry["url"], True)
+            for keyword, name, url in SEARCH_SHORTCUTS:
+                add_line(keyword, name, url, False)
+            listbox.show_all()
+
+        title = Gtk.Label(xalign=0.0)
+        title.set_markup("<b>Add your own</b>")
+        area.pack_start(title, False, False, 0)
+        name_entry, key_entry, url_entry = Gtk.Entry(), Gtk.Entry(), Gtk.Entry()
+        name_entry.set_placeholder_text("Name, e.g. Amazon")
+        key_entry.set_placeholder_text("Shortcut: az")
+        key_entry.set_width_chars(13)
+        url_entry.set_placeholder_text("Address, with %s where the search goes")
+        url_entry.set_tooltip_text("For example https://www.amazon.in/s?k=%s")
+        form = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        form.pack_start(name_entry, True, True, 0)
+        form.pack_start(key_entry, False, False, 0)
+        area.pack_start(form, False, False, 0)
+        add_btn = Gtk.Button(label="Add")
+        add_btn.get_style_context().add_class("settings-primary-btn")
+        url_line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        url_line.pack_start(url_entry, True, True, 0)
+        url_line.pack_start(add_btn, False, False, 0)
+        area.pack_start(url_line, False, False, 0)
+        status = self._hint("It can also be chosen as the default search engine in Settings → General.")
+        area.pack_start(status, False, False, 0)
+
+        def on_add(*_args):
+            error = self.add_custom_search_engine(name_entry.get_text(), key_entry.get_text(), url_entry.get_text())
+            if error:
+                status.set_markup(f"<small>⚠️ {GLib.markup_escape_text(error)}</small>")
+                return
+            status.set_markup(f"<small>✅ Added {GLib.markup_escape_text(name_entry.get_text().strip())}.</small>")
+            for entry in (name_entry, key_entry, url_entry):
+                entry.set_text("")
+            refresh()
+
+        add_btn.connect("clicked", on_add)
+        url_entry.connect("activate", on_add)
+        refresh()
+        dialog.show_all()
+        dialog.run()
+        dialog.destroy()
 
     def open_site_settings_manager(self, parent=None):
         dialog, area = self._make_dialog("Site settings", parent, 560, 420)

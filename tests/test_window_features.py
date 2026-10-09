@@ -61,9 +61,13 @@ PAGES = {
 }
 
 
+BIG_FILE = bytes(range(256)) * 4096  # 1 MiB with a pattern, so a misplaced byte shows
+
 class Handler(http.server.BaseHTTPRequestHandler):
     hits = {}
     requests = []  # full paths, query included
+    download_requests = []  # (path, Range header, Cookie header) for /big.dat and /norange.dat
+    download_delay = 0.01
 
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -77,6 +81,36 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            return
+        if path in ("/big.dat", "/norange.dat"):  # a slow download; /big.dat can send just a part (Range)
+            Handler.download_requests.append((path, self.headers.get("Range"), self.headers.get("Cookie")))
+            body, start = BIG_FILE, 0
+            wanted = self.headers.get("Range") if path == "/big.dat" else None
+            if wanted and wanted.startswith("bytes=") and wanted.endswith("-"):
+                start = int(wanted[6:-1])
+                if start >= len(body):
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{len(body)}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {start}-{len(body) - 1}/{len(body)}")
+            else:
+                self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", f'attachment; filename="{path[1:]}"')
+            self.send_header("Accept-Ranges", "bytes" if path == "/big.dat" else "none")
+            self.send_header("ETag", '"v1"')
+            self.send_header("Content-Length", str(len(body) - start))
+            self.end_headers()
+            try:
+                for i in range(start, len(body), 8192):
+                    self.wfile.write(body[i:i + 8192])
+                    self.wfile.flush()
+                    time.sleep(Handler.download_delay)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the browser stopped (paused or cancelled)
             return
         if path == "/broken.zip":  # promises more than it sends, then hangs up
             self.send_response(200)
@@ -445,7 +479,6 @@ class WindowFeatureTests(unittest.TestCase):
         with open(bb.SESSION_FILE) as f:
             self.assertEqual(json.load(f)["pinned"], [0])
 
-        n = win.notebook.get_n_pages()
         win.close_other_tabs(win.notebook.get_nth_page(1))
         self.assertEqual(win.notebook.get_n_pages(), 2, "close-others keeps the chosen tab and pinned tabs")
         self.assertTrue(win._closed_tabs)
@@ -605,6 +638,102 @@ class WindowFeatureTests(unittest.TestCase):
         self.win.on_download_failed(cancelled, "cancelled")
         self.win.on_download_finished(cancelled)  # WebKit emits "finished" after "failed"
         self.assertEqual(cancelled["status"], "Failed ❌")
+
+    def slow_download(self, path):
+        folder = tempfile.mkdtemp(dir=_HOME)
+        self.win.download_dir = folder
+        self.addCleanup(setattr, self.win, "download_dir", "")
+        Handler.download_delay = 0.03
+        self.addCleanup(setattr, Handler, "download_delay", 0.01)
+        Handler.download_requests.clear()
+        entry = self.start_download(path)
+        self.assertTrue(spin(lambda: entry["received"] > 100_000, 10), entry)
+        return entry, folder
+
+    def test_download_pauses_and_resumes_where_it_stopped(self):
+        wv = self.load("/blank", "blank")
+        js(wv, "document.cookie = 'sid=abc123; path=/'")
+        entry, folder = self.slow_download("/big.dat")
+        self.assertTrue(entry["resumable"])
+        self.assertTrue(self.win.pause_download(entry))
+        self.assertEqual(entry["status"], "Paused")
+        part = entry["path"] + bb.DOWNLOAD_PART_SUFFIX
+        spin(lambda: False, 0.5)
+        kept = os.path.getsize(part)
+        self.assertGreater(kept, 100_000)
+        self.assertLess(kept, len(BIG_FILE))
+        self.assertEqual(sorted(os.listdir(folder)), ["big.dat.part"], "WebKit's own copy is gone; ours stays")
+        spin(lambda: False, 0.5)
+        self.assertEqual(entry["status"], "Paused", "a pause isn't reported as a failure")
+
+        Handler.download_delay = 0.003
+        self.assertTrue(self.win.resume_download(entry))
+        self.assertTrue(spin(lambda: entry["status"] != "Downloading...", 15), entry)
+        self.assertEqual(entry["status"], "Completed ✅", entry)
+        with open(entry["path"], "rb") as f:
+            self.assertTrue(f.read() == BIG_FILE, "the resumed file is exactly the original")
+        self.assertFalse(os.path.exists(part))
+        path, wanted, cookie = Handler.download_requests[-1]
+        self.assertEqual(wanted, f"bytes={kept}-", "only the missing part was asked for")
+        self.assertIn("sid=abc123", cookie or "", "the site's cookies go with the resumed request")
+
+    def test_download_restarts_when_the_server_cant_resume(self):
+        entry, folder = self.slow_download("/norange.dat")
+        self.assertTrue(self.win.pause_download(entry))
+        Handler.download_delay = 0.003
+        self.assertTrue(self.win.resume_download(entry))
+        self.assertTrue(spin(lambda: entry["status"] != "Downloading...", 15), entry)
+        self.assertEqual(entry["status"], "Completed ✅", entry)
+        self.assertIn("started again", entry["note"])
+        with open(entry["path"], "rb") as f:
+            self.assertTrue(f.read() == BIG_FILE)
+        self.assertEqual(os.listdir(folder), ["norange.dat"])
+
+    def test_paused_download_can_be_cancelled(self):
+        entry, folder = self.slow_download("/big.dat")
+        self.assertTrue(self.win.pause_download(entry))
+        self.assertTrue(self.win.cancel_download(entry))
+        self.assertEqual(entry["status"], "Cancelled")
+        spin(lambda: False, 0.3)
+        self.assertEqual(os.listdir(folder), [], "nothing left behind")
+        self.assertFalse(self.win.resume_download(entry))
+
+    def test_cut_off_download_is_kept_aside_for_resume(self):
+        self.win.download_dir = folder = tempfile.mkdtemp(dir=_HOME)
+        self.addCleanup(setattr, self.win, "download_dir", "")
+        entry = self.start_download("/broken.zip")
+        self.assertTrue(spin(lambda: entry["status"] != "Downloading...", 10), entry)
+        self.assertEqual(entry["status"], "Failed ❌")
+        self.assertEqual(os.listdir(folder), ["broken.zip.part"], "the cut-off file doesn't pass for the whole one")
+
+    def test_downloads_window_is_live(self):
+        entry, folder = self.slow_download("/big.dat")
+        self.addCleanup(lambda: self.win.cancel_download(entry))
+        dialog = self.win.on_downloads_clicked(None)
+        try:
+            self.assertFalse(dialog.get_modal(), "browsing goes on while it's open")
+            self.assertIs(self.win.on_downloads_clicked(None), dialog, "opening it again brings it forward")
+
+            def texts():
+                found = []
+                def walk(w):
+                    if isinstance(w, (Gtk.Label, Gtk.Button)) and not isinstance(w, Gtk.Container) or isinstance(w, Gtk.Label):
+                        found.append(w.get_text())
+                    elif isinstance(w, Gtk.Button):
+                        found.append(w.get_label())
+                    for c in (w.get_children() if isinstance(w, Gtk.Container) else ()):
+                        walk(c)
+                walk(dialog)
+                return found
+            self.assertIn("⏸ Pause", texts())
+            first = entry["received"]
+            self.assertTrue(spin(lambda: any(" of 1.0 MB" in t and "/s" in t for t in texts()), 5), texts())
+            self.assertGreater(entry["received"], first)
+            self.win.pause_download(entry)
+            self.assertTrue(spin(lambda: "▶ Resume" in texts(), 2), texts())
+        finally:
+            dialog.destroy()
+        self.assertIsNone(self.win._downloads_window)
 
     # ---- links from other apps ---------------------------------------------
     def test_links_passed_at_startup_open_as_tabs(self):
@@ -1249,6 +1378,177 @@ class WindowFeatureTests(unittest.TestCase):
             self.assertEqual(self.win.notebook.get_n_pages(), pages)
         finally:
             dialog.destroy()
+
+    def test_about_page_shows_the_web_engine_version(self):
+        def engine_row(dialog):
+            def find(widget):
+                if hasattr(widget, "_arrow_outdated"):
+                    return widget
+                for child in (widget.get_children() if isinstance(widget, Gtk.Container) else ()):
+                    found = find(child)
+                    if found:
+                        return found
+            return find(dialog)
+
+        def labels(widget):
+            if isinstance(widget, Gtk.Label):
+                return [widget.get_text()]
+            kids = widget.get_children() if isinstance(widget, Gtk.Container) else ()
+            return [t for child in kids for t in labels(child)]
+
+        version = ".".join(map(str, bb.webkit_version()))
+        dialog = self.win.build_settings_dialog("about")
+        try:
+            row = engine_row(dialog)
+            self.assertIn("Web engine: WebKitGTK " + version, labels(row))
+            self.assertEqual(row._arrow_outdated, bb.webkit_version() < bb.MIN_WEBKIT_VERSION)
+        finally:
+            dialog.destroy()
+
+        real_minimum = bb.MIN_WEBKIT_VERSION
+        bb.MIN_WEBKIT_VERSION = (99, 0, 0)
+        try:
+            dialog = self.win.build_settings_dialog("about")
+            try:
+                row = engine_row(dialog)
+                self.assertTrue(row._arrow_outdated)
+                self.assertIn("⚠️ Outdated", labels(row))
+            finally:
+                dialog.destroy()
+        finally:
+            bb.MIN_WEBKIT_VERSION = real_minimum
+
+    # ---- browser theme -------------------------------------------------------
+    def test_browser_theme_switches_live_and_is_saved(self):
+        win = self.win
+        self.addCleanup(win.set_ui_theme, "dark")
+        self.assertEqual(win.ui_theme, "dark", "dark stays the default")
+        top_bar_colour = lambda: win.top_bar.get_style_context().get_property(
+            "background-color", Gtk.StateFlags.NORMAL).to_string()
+        dark = top_bar_colour()
+        dialog = win.build_settings_dialog("general")
+        try:
+            buttons = dialog._arrow_controls["ui_theme"]
+            self.assertTrue(buttons["dark"].get_active())
+            buttons["light"].set_active(True)  # what a click does
+            self.assertEqual(win.ui_theme, "light")
+            self.assertEqual(top_bar_colour(), "rgb(255,255,255)", "light theme applies without a restart")
+            with open(bb.CONFIG_FILE) as f:
+                self.assertEqual(json.load(f)["ui_theme"], "light")
+            buttons["dark"].set_active(True)
+            self.assertEqual(top_bar_colour(), dark)
+        finally:
+            dialog.destroy()
+        win.set_ui_theme("neon")
+        self.assertEqual(win.ui_theme, "dark", "unknown themes are ignored")
+
+    # ---- search ----------------------------------------------------------
+    def test_search_shortcuts_and_own_search_engines(self):
+        win = self.win
+        saved_engine, saved_custom = win.search_engine, list(win.custom_search_engines)
+
+        def restore():
+            win.custom_search_engines = saved_custom
+            win.set_search_engine(saved_engine)
+        self.addCleanup(restore)
+        self.assertIsNone(win.add_custom_search_engine("Local", "LT", self.base + "/done?q=%s"))
+        self.assertIn("already", win.add_custom_search_engine("local", "zz", self.base + "/done?q=%s"))
+        self.assertIn("already used", win.add_custom_search_engine("Other", "w", self.base + "/done?q=%s"))
+        self.assertIn("%s", win.add_custom_search_engine("Other", "o", self.base + "/done"))
+        with open(bb.CONFIG_FILE) as f:
+            self.assertEqual(json.load(f)["custom_search_engines"],
+                             [{"name": "Local", "keyword": "lt", "url": self.base + "/done?q={query}"}])
+
+        win.url_entry.set_text("lt hello world")
+        win.on_url_activate(win.url_entry)
+        self.assertTrue(spin(lambda: "/done?q=hello%20world" in Handler.requests, 8), Handler.requests)
+
+        win.set_search_engine("Local")
+        dialog = win.build_settings_dialog("general")
+        try:
+            combo = dialog._arrow_controls["search_engine"]
+            self.assertEqual(combo.get_active_text(), "Local")
+            self.assertIn("Local", [row[0] for row in combo.get_model()])
+        finally:
+            dialog.destroy()
+        win.url_entry.set_text("plain words")
+        win.on_url_activate(win.url_entry)
+        self.assertTrue(spin(lambda: "/done?q=plain%20words" in Handler.requests, 8), Handler.requests)
+        self.assertIn("Local", win.url_entry.get_placeholder_text())
+
+        win.remove_custom_search_engine("Local")
+        self.assertEqual(win.search_engine, bb.DEFAULT_SEARCH_ENGINE, "removing the default engine falls back")
+        self.assertEqual(win.custom_search_engines, [])
+
+    # ---- tab audio ---------------------------------------------------------
+    def test_tab_mute_button_follows_the_page(self):
+        win = self.win
+        tab_box = win.get_active_tab_box()
+        wv, button = tab_box._arrow_webview, tab_box._arrow_audio_btn
+        self.addCleanup(wv.set_is_muted, False)
+        self.assertFalse(button.get_visible(), "silent tabs show no speaker")
+        wv.set_is_muted(True)  # the notify::is-muted signal updates the tab
+        self.assertTrue(spin(lambda: button.get_visible() and button.get_label() == "🔇", 2))
+        win.toggle_tab_muted(tab_box)
+        self.assertFalse(wv.get_is_muted())
+        self.assertFalse(button.get_visible())
+
+        # A tab playing sound (pages can't autoplay sound in a test, so a stand-in webview)
+        state = {"playing": True, "muted": False}
+        stand_in = type("StandIn", (), {"is_playing_audio": lambda self: state["playing"],
+                                        "get_is_muted": lambda self: state["muted"]})()
+        fake_tab = type("Tab", (), {})()
+        fake_tab._arrow_webview, fake_tab._arrow_audio_btn = stand_in, Gtk.Button(label="?")
+        win._update_tab_audio(fake_tab)
+        self.assertTrue(fake_tab._arrow_audio_btn.get_visible())
+        self.assertEqual(fake_tab._arrow_audio_btn.get_label(), "🔊")
+        self.assertEqual(fake_tab._arrow_audio_btn.get_tooltip_text(), "Mute tab")
+        state["playing"] = False
+        win._update_tab_audio(fake_tab)
+        self.assertFalse(fake_tab._arrow_audio_btn.get_visible(), "hidden again once the sound stops")
+
+    # ---- export and backup ---------------------------------------------------
+    def test_export_bookmarks_and_restore_a_backup(self):
+        win = self.win
+        saved = (list(win.bookmarks), win.adblock_enabled, win.download_dir, win.homepage)
+
+        def restore():
+            win.bookmarks, win.adblock_enabled, win.download_dir, win.homepage = saved
+            bb.save_bookmarks(win.bookmarks)
+            win.save_settings()
+        self.addCleanup(restore)
+        folder = tempfile.mkdtemp(dir=_HOME)
+        win.bookmarks = [{"url": "https://kept.example/", "title": "Kept", "added": 1700000000}]
+        self.assertEqual(win.export_bookmarks_to(os.path.join(folder, "marks.html")), 1)
+        with open(os.path.join(folder, "marks.html")) as f:
+            self.assertEqual([b["url"] for b in bb.parse_netscape_bookmarks(f.read())], ["https://kept.example/"])
+        self.assertEqual(os.stat(os.path.join(folder, "marks.html")).st_mode & 0o077, 0)
+
+        win.site_settings["zoomed.example"] = {"zoom": 1.5}
+        win.homepage = "https://home.example"
+        backup_path = os.path.join(folder, "backup.json")
+        win.write_backup_to(backup_path)
+        self.assertEqual(os.stat(backup_path).st_mode & 0o077, 0, "the backup is private to the user")
+
+        # things change after the backup ...
+        win.bookmarks = []
+        win.site_settings.clear()
+        win.homepage = "https://other.example"
+        win.download_dir = folder  # this computer's own; a restore keeps it
+        restored, added_b, sites = win.apply_backup(win.read_backup_file(backup_path))
+        self.assertGreater(restored, 10)
+        self.assertEqual((added_b, sites), (1, 1))
+        self.assertEqual(win.homepage, "https://home.example")
+        self.assertEqual(win.download_dir, folder)
+        self.assertEqual(win.site_settings["zoomed.example"], {"zoom": 1.5})
+        self.assertEqual([b["url"] for b in win.bookmarks], ["https://kept.example/"])
+        with open(bb.CONFIG_FILE) as f:
+            self.assertEqual(json.load(f)["homepage"], "https://home.example")
+
+        with open(os.path.join(folder, "not-a-backup.json"), "w") as f:
+            f.write("{}")
+        with self.assertRaises(ValueError):
+            win.read_backup_file(os.path.join(folder, "not-a-backup.json"))
 
     def test_private_window_never_writes_site_settings(self):
         private = bb.ArrowBrowserWindow(private=True)

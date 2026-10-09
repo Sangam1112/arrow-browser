@@ -8,6 +8,8 @@ import sqlite3
 import tempfile
 import time
 import unittest
+import urllib.error
+import urllib.request
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 spec = importlib.util.spec_from_file_location("bb", os.path.join(ROOT, "arrow_browser.py"))
@@ -778,6 +780,250 @@ class WebProcessCrashTests(unittest.TestCase):
         webview.load_uri.assert_not_called()
         self.assertIn("ran out of memory", webview.load_html.call_args[0][0])
 
+
+
+class SearchTests(unittest.TestCase):
+    def test_new_installs_search_with_duckduckgo(self):
+        self.assertEqual(bb.DEFAULT_SEARCH_ENGINE, "DuckDuckGo")
+        self.assertIn(bb.DEFAULT_SEARCH_ENGINE, bb.SEARCH_ENGINES)
+        self.assertEqual(bb.sanitize_homepage_url(""), "https://duckduckgo.com")
+        for name in ("Brave Search", "Startpage", "Qwant", "Google"):
+            self.assertIn("{query}", bb.SEARCH_ENGINES[name])
+
+    def test_search_url_encodes_the_whole_query(self):
+        self.assertEqual(bb.search_url("https://s.example/?q={query}", "a/b & c?"),
+                         "https://s.example/?q=a%2Fb%20%26%20c%3F")
+        self.assertEqual(bb.search_url("https://s.example/{x}?q={query}", "hi"), "https://s.example/{x}?q=hi",
+                         "other braces in a user's template are left alone")
+
+    def test_shortcuts(self):
+        self.assertEqual(bb.resolve_search_shortcut("w taj mahal"),
+                         "https://en.wikipedia.org/wiki/Special:Search?search=taj%20mahal")
+        self.assertEqual(bb.resolve_search_shortcut("YT  lofi music "),
+                         "https://www.youtube.com/results?search_query=lofi%20music")
+        self.assertIsNone(bb.resolve_search_shortcut("w"), "a shortcut alone is an ordinary search")
+        self.assertIsNone(bb.resolve_search_shortcut("weather today"))
+        mine = [{"name": "Amazon", "keyword": "az", "url": "https://www.amazon.in/s?k={query}"}]
+        self.assertEqual(bb.resolve_search_shortcut("az usb cable", mine), "https://www.amazon.in/s?k=usb%20cable")
+
+    def test_search_templates_from_users(self):
+        self.assertEqual(bb.normalize_search_template(" https://x.example/s?q=%s "), "https://x.example/s?q={query}")
+        self.assertEqual(bb.normalize_search_template("https://x.example/s?q={query}"), "https://x.example/s?q={query}")
+        for bad in ("https://x.example/s", "javascript:alert(%s)", "file:///etc/%s", "x.example/?q=%s",
+                    "https://x.example/?a=%s&b=%s", "", None):
+            self.assertIsNone(bb.normalize_search_template(bad), bad)
+
+    def test_custom_engines_from_settings_are_checked(self):
+        cleaned = bb.clean_custom_search_engines([
+            {"name": "Amazon", "keyword": "AZ", "url": "https://www.amazon.in/s?k=%s"},
+            {"name": "amazon", "keyword": "am", "url": "https://a.example/?q=%s"},   # same name
+            {"name": "Mine", "keyword": "w", "url": "https://m.example/?q=%s"},      # built-in shortcut
+            {"name": "Google", "keyword": "", "url": "https://g.example/?q=%s"},     # built-in engine
+            {"name": "Bad", "keyword": "", "url": "javascript:%s"},
+            {"name": "Two words", "keyword": "a b", "url": "https://t.example/?q=%s"},
+            "junk", {"name": "", "url": "https://e.example/?q=%s"},
+            {"name": "No key", "keyword": "", "url": "https://n.example/?q=%s"},
+        ])
+        self.assertEqual(cleaned, [{"name": "Amazon", "keyword": "az", "url": "https://www.amazon.in/s?k={query}"},
+                                   {"name": "No key", "keyword": "", "url": "https://n.example/?q={query}"}])
+        self.assertEqual(bb.clean_custom_search_engines("not a list"), [])
+
+
+class BackupTests(unittest.TestCase):
+    MARKS = [{"url": "https://a.example/?x=1&y=<2>", "title": "A & \"B\" <c>", "added": 1700000000},
+             {"url": "javascript:alert(1)", "title": "bad"},
+             {"url": "http://b.example/", "title": "", "added": "junk"}]
+
+    def test_exported_bookmarks_import_back(self):
+        html = bb.export_netscape_bookmarks(self.MARKS)
+        self.assertTrue(html.startswith("<!DOCTYPE NETSCAPE-Bookmark-file-1>"))
+        self.assertNotIn("javascript:", html)
+        back = bb.parse_netscape_bookmarks(html)
+        self.assertEqual([(b["url"], b["title"]) for b in back],
+                         [("https://a.example/?x=1&y=<2>", 'A & "B" <c>'), ("http://b.example/", "http://b.example/")])
+        self.assertEqual(back[0]["added"], 1700000000)
+
+    def test_backup_round_trip_leaves_out_this_computers_settings(self):
+        settings = {"homepage": "https://h.example", "adblock_enabled": False, "download_dir": "/home/me/dl",
+                    "gpu_acceleration_enabled": True, "first_run_greeted": True}
+        sites = {"a.example": {"zoom": 1.5, "permissions": {"media": "allow"}}}
+        backup = bb.build_backup(settings, self.MARKS, sites, now=5)
+        self.assertEqual(backup["settings"], {"homepage": "https://h.example", "adblock_enabled": False})
+        restored = bb.read_backup(json.dumps(backup).encode())
+        self.assertEqual(restored["settings"], backup["settings"])
+        self.assertEqual([b["url"] for b in restored["bookmarks"]], ["https://a.example/?x=1&y=<2>", "http://b.example/"])
+        self.assertIsInstance(restored["bookmarks"][1]["added"], float)
+        self.assertEqual(restored["site_settings"], sites)
+
+    def test_restore_rejects_other_files_and_odd_values(self):
+        for raw in (b"", b"\xff\xfe", b"[]", b'{"arrow_backup": 2}', b'{"settings": {}}', b"x" * (bb.BACKUP_MAX_BYTES + 1)):
+            with self.assertRaises(ValueError):
+                bb.read_backup(raw)
+        raw = json.dumps({"arrow_backup": 1, "settings": {"download_dir": "/x", "adblock_enabled": True},
+                          "bookmarks": "nope", "site_settings": {
+                              "OK.example": {"zoom": 9, "adblock": "no", "javascript": False, "evil": 1,
+                                             "permissions": {"media": "allow", "files": "allow", "location": "maybe"}},
+                              "bad host/": {"javascript": False}, "empty.example": {"zoom": True}}}).encode()
+        restored = bb.read_backup(raw)
+        self.assertEqual(restored["settings"], {"adblock_enabled": True})
+        self.assertEqual(restored["bookmarks"], [])
+        self.assertEqual(restored["site_settings"], {"ok.example": {"javascript": False, "permissions": {"media": "allow"}}})
+
+
+class ResumableDownloadTests(TmpDirCase):
+    def test_content_range(self):
+        self.assertEqual(bb.parse_content_range("bytes 100-199/1000"), (100, 199, 1000))
+        self.assertEqual(bb.parse_content_range("bytes 0-0/*"), (0, 0, None))
+        for bad in ("bytes 5-4/10", "bytes 0-10/10", "items 0-1/2", "", None, "bytes */10"):
+            self.assertIsNone(bb.parse_content_range(bad), bad)
+
+    def test_resume_plan(self):
+        self.assertEqual(bb.resume_plan(206, "bytes 500-999/1000", 500), ("append", 1000))
+        self.assertEqual(bb.resume_plan(206, "bytes 400-999/1000", 500)[0], "fail", "wrong part")
+        self.assertEqual(bb.resume_plan(200, None, 500), ("restart", None))
+        self.assertEqual(bb.resume_plan(416, "bytes */500", 500), ("done", 500))
+        self.assertEqual(bb.resume_plan(416, "bytes */900", 500)[0], "fail")
+        self.assertEqual(bb.resume_plan(404, None, 0), ("fail", "the server answered 404"))
+
+    def test_status_text(self):
+        self.assertEqual(bb.format_bytes(0), "0 B")
+        self.assertEqual(bb.format_bytes(1536), "1.5 KB")
+        self.assertEqual(bb.format_bytes(5 * 1024 ** 3), "5.0 GB")
+        self.assertEqual(bb.format_duration(75), "1 min 15 s")
+        entry = {"status": "Downloading...", "received": 1024 ** 2, "total": 3 * 1024 ** 2, "speed": 1024 ** 2}
+        self.assertEqual(bb.download_status_text(entry), "1.0 MB of 3.0 MB · 1.0 MB/s · 2 s left")
+        entry.update(status="Paused", speed=0)
+        self.assertEqual(bb.download_status_text(entry), "Paused · 1.0 MB of 3.0 MB")
+        entry.update(status="Failed ❌", error="timed out")
+        self.assertEqual(bb.download_status_text(entry), "Failed: timed out · 1.0 MB of 3.0 MB")
+        self.assertEqual(bb.download_status_text({"status": "Completed ✅", "received": 13, "total": 13}), "Done · 13 B")
+
+    def test_resume_redirects_keep_cookies_on_their_site(self):
+        import http.server
+        import threading
+        seen = {}
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                seen[(self.headers.get("Host").split(":")[0], self.path)] = self.headers.get("Cookie")
+                if self.path in ("/away", "/same"):
+                    host = "localhost" if self.path == "/away" else "127.0.0.1"
+                    self.send_response(302)
+                    self.send_header("Location", f"http://{host}:{self.server.server_port}/file")
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"ok")
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        port = server.server_port
+        for path in ("/away", "/same"):
+            request = urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers={"Cookie": "sid=1"})
+            with bb._RESUME_OPENER.open(request, timeout=5) as response:
+                self.assertEqual(response.read(), b"ok")
+        self.assertEqual(seen[("127.0.0.1", "/away")], "sid=1")
+        self.assertIsNone(seen[("localhost", "/file")], "cookies don't follow a redirect to another site")
+        self.assertEqual(seen[("127.0.0.1", "/file")], "sid=1", "a redirect within the site keeps them")
+        handler = bb._ResumeRedirectHandler()
+        with self.assertRaises(urllib.error.HTTPError):
+            handler.redirect_request(urllib.request.Request("https://a.example/f"), None, 302, "Found", {},
+                                     "http://a.example/f")
+
+    def test_partial_download_is_kept_by_a_link(self):
+        working, part = os.path.join(self.tmp, "f.wkdownload"), os.path.join(self.tmp, "f.part")
+        write_text(working, "abc")
+        self.assertEqual(bb.keep_partial_download(working, part), 3)
+        os.remove(working)  # what WebKit does on cancel
+        with open(part) as f:
+            self.assertEqual(f.read(), "abc")
+        self.assertEqual(os.stat(part).st_mode & 0o077, 0)
+
+    def run_job(self, part, responses, stop_after=None):
+        import io
+        from gi.repository import GLib
+        sent = []
+
+        class Response(io.BytesIO):
+            def __init__(self, status, headers, body):
+                super().__init__(body)
+                self.status, self.headers = status, headers
+
+        def opener(request, timeout):
+            sent.append(dict(request.header_items()))
+            return Response(*responses.pop(0))
+
+        ended, progress = [], []
+
+        def on_progress(received, total):
+            progress.append(received)
+            if stop_after and received >= stop_after:
+                job.stop()
+        job = bb.ResumeJob("https://f.example/file", part, {"User-Agent": "t", "If-Range": '"v1"'}, on_progress,
+                           lambda outcome, detail: ended.append((outcome, detail)), opener=opener)
+        job.start()
+        context = GLib.MainContext.default()
+        deadline = time.time() + 5
+        while not ended and time.time() < deadline:
+            context.iteration(False)
+            time.sleep(0.01)
+        return ended[0] if ended else None, sent, job
+
+    def test_job_appends_the_rest(self):
+        part = os.path.join(self.tmp, "f.part")
+        write_text(part, "hello ")
+        ended, sent, _ = self.run_job(part, [(206, {"Content-Range": "bytes 6-10/11"}, b"world")])
+        self.assertEqual(ended, ("done", None))
+        self.assertEqual(sent[0]["Range"], "bytes=6-")
+        self.assertEqual(sent[0]["If-range"], '"v1"')
+        with open(part) as f:
+            self.assertEqual(f.read(), "hello world")
+
+    def test_job_starts_over_when_the_server_ignores_the_range(self):
+        part = os.path.join(self.tmp, "f.part")
+        write_text(part, "stale")
+        ended, _, job = self.run_job(part, [(200, {"Content-Length": "11"}, b"hello world")])
+        self.assertEqual(ended, ("done", None))
+        self.assertIn("started again", job.note)
+        with open(part) as f:
+            self.assertEqual(f.read(), "hello world")
+
+    def test_job_from_nothing_and_short_answers(self):
+        part = os.path.join(self.tmp, "f.part")
+        ended, sent, _ = self.run_job(part, [(200, {"Content-Length": "20"}, b"only ten b")])
+        self.assertNotIn("Range", sent[0])
+        self.assertNotIn("If-range", sent[0], "If-Range only goes with a Range")
+        self.assertEqual(ended, ("failed", "the connection closed before the whole file arrived"))
+
+    def test_job_can_be_paused(self):
+        part = os.path.join(self.tmp, "f.part")
+        body = b"x" * (bb.DOWNLOAD_CHUNK_BYTES * 4)
+        ended, _, _ = self.run_job(part, [(200, {"Content-Length": str(len(body))}, body)],
+                                   stop_after=bb.DOWNLOAD_CHUNK_BYTES)
+        self.assertEqual(ended, ("paused", None))
+        self.assertLess(os.path.getsize(part), len(body))
+
+
+class WebkitVersionTests(unittest.TestCase):
+    def test_reports_the_running_engine(self):
+        version = bb.webkit_version()
+        self.assertEqual(len(version), 3)
+        self.assertTrue(all(isinstance(n, int) for n in version))
+        self.assertGreaterEqual(version, (2, 0, 0))
+
+    def test_warns_only_below_the_minimum(self):
+        self.assertFalse(bb.webkit_version_note((2, 52, 6), (2, 50, 0))[0])
+        self.assertFalse(bb.webkit_version_note((2, 50, 0), (2, 50, 0))[0], "the minimum itself is fine")
+        self.assertFalse(bb.webkit_version_note((3, 0, 0), (2, 50, 0))[0])
+        outdated, hint = bb.webkit_version_note((2, 48, 9), (2, 50, 0))
+        self.assertTrue(outdated)
+        self.assertIn("Older than 2.50", hint)
+        self.assertIn("package manager", bb.webkit_version_note((2, 52, 6))[1])
 
 
 class WellbeingTests(TmpDirCase):
