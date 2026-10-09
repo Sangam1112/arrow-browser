@@ -3,6 +3,24 @@
 All notable changes to Arrow Browser (called Bharat Browser up to 1.5.19). Versions follow `MAJOR.MINOR.PATCH`.
 Releases are signed; the in-app updater only installs a release whose signature verifies.
 
+## [1.6.3] - 2026-10-10
+
+### Added
+- **Pause and resume downloads.** The Downloads window now updates live: a progress bar, how much has arrived, the speed and the time left for each download, with **Pause**, **Resume** and **Cancel** buttons, and **Open** and **Show** once a file is done. A paused download keeps what it already has and fetches only the rest when you resume. If the website can't continue a download part-way, it starts again from the beginning and says so. The window no longer blocks the browser while it's open.
+- **Search shortcuts.** In the address bar, type a shortcut, a space and your search: `w taj mahal` searches Wikipedia, `yt lofi music` YouTube, `gh` GitHub, `map` OpenStreetMap, `d`, `br`, `sp`, `g` and `b` the search engines. Add your own in Settings → General → Search shortcuts (for example Amazon, with `%s` where the search goes). Your own search engines can also be the default one.
+- **More search engines:** Brave Search, Startpage, Qwant and Ecosia, next to DuckDuckGo, Google, Bing and Yahoo.
+- **Light theme.** Settings → General → Browser theme switches the toolbar, tabs, menus and Settings between dark and light, at once, without a restart. Dark stays the default. This is separate from "Dark mode for websites", which changes the pages themselves.
+- **Mute a tab.** A tab playing sound shows 🔊. Click it (or right-click the tab → Mute Tab) to silence it; it then shows 🔇.
+- **Export and back up** (Settings → History & Data). Export your bookmarks as an .html file that Firefox, Chrome and other browsers can import. Back up your settings, search engines, bookmarks and site settings to one file, and restore it on a new computer or after a fresh install. Saved passwords and history aren't included. Before restoring, Arrow says which sites the backup would allow to use your camera, microphone, location or notifications.
+- **Settings → About shows the web engine's version** (WebKitGTK), which your system's updates keep up to date, not Arrow's. It's marked "Outdated" if it's older than 2.52.
+
+### Changed
+- **New installs search with DuckDuckGo** and use it as the homepage. If you already use Arrow, your search engine and homepage stay as they are.
+
+### Fixed
+- **A download cut off by a bad connection looked like a finished file.** It kept the real file name although part of it was missing. It's now kept as `name.part` and marked as failed, with a **Resume** button to fetch the rest.
+- **The selected page in the Settings sidebar** was drawn grey by the system theme instead of the browser's own highlight.
+
 ## [1.6.2] - 2026-10-08
 
 ### Added

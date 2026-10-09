@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Arrow Browser v1.6.2 - GTK3 / WebKit2 Python Application
+Arrow Browser v1.6.3 - GTK3 / WebKit2 Python Application
 Modern, Ultra-Fast, Multi-Tab, and Privacy-First Web Browser engineered for Linux (Ubuntu)
 
 Copyright (C) 2026 Sangam1112
@@ -17,7 +17,7 @@ import os
 import json
 import shutil
 
-APP_VERSION = "1.6.2"
+APP_VERSION = "1.6.3"
 # The self-updater cannot rewrite a root-owned package install, so it keeps its updates in a per-user copy
 # that the launcher (/usr/bin/arrow-browser) prefers over the system one.
 USER_INSTALL_DIR = os.path.expanduser("~/.local/share/arrow-browser")

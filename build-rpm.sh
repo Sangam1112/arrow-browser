@@ -78,6 +78,8 @@ python3 -m py_compile /usr/share/arrow-browser/arrow_browser.py >/dev/null 2>&1 
 if [ \$1 -eq 0 ]; then rm -rf /usr/share/arrow-browser/__pycache__; fi
 
 %changelog
+* Sat Oct 10 2026 Arrow Browser Developer <Sangam1112@users.noreply.github.com> - 1.6.3-1
+- Pause and resume downloads, search shortcuts, light theme, tab muting and backups
 * Thu Oct 08 2026 Arrow Browser Developer <Sangam1112@users.noreply.github.com> - 1.6.2-1
 - Digital Wellbeing; dark mode toggle moved to Settings
 * Thu Oct 08 2026 Arrow Browser Developer <Sangam1112@users.noreply.github.com> - 1.6.1-1
